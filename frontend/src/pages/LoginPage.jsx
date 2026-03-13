@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
-import './LoginPage.css'; // <-- import the CSS
+import './LoginPage.css';
 
 const LoginPage = () => {
   const [email, setEmail] = useState('');
@@ -23,7 +23,8 @@ const LoginPage = () => {
   return (
     <div className="login-container">
       <div className="login-form">
-        <h2>Pharmacy Management System</h2>
+        <h1 className="system-title">PharmaSys</h1>
+        <p className="system-subtitle">Pharmacy Management System</p>
         {error && <div className="error-message">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-group">

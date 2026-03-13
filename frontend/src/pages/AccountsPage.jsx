@@ -13,7 +13,7 @@ const AccountsPage = () => {
   const [pharmacyName, setPharmacyName] = useState('Pharmacy');
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
+  //const [editing, setEditing] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -76,7 +76,7 @@ const AccountsPage = () => {
         </div>
       </div>
 
-      <button onClick={() => { setEditing(null); setModalOpen(true); }} className="success">
+      <button onClick={() => { setModalOpen(true); }} className="success">
         Add Transaction
       </button>
 
