@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently \"nodemon server.js\" \"cd frontend && npm run dev\"",
     "build": "cd frontend && npm run build",
-    "start": "NODE_ENV=production node server.js",
+  "start": "cross-env NODE_ENV=production node server.js",
     "postinstall": "cd frontend && npm install"
   },
   "dependencies": {
@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
     "nodemon": "^2.0.22"
   }
 }
