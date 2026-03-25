@@ -124,6 +124,20 @@
             color: #999;
             margin-top: 2rem;
         }
+        pre {
+            background: #f4f4f4;
+            padding: 1rem;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            margin: 1rem 0;
+        }
+        code {
+            background: #f4f4f4;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: monospace;
+        }
     </style>
 </head>
 <body>
@@ -135,7 +149,7 @@
         <p style="font-size: 1.8rem; margin-bottom: 2rem;">Pharmacy Management System</p>
         <hr>
         <p style="font-size: 1.3rem; margin-top: 2rem;">Developer: Davix HDM</p>
-        <p style="font-size: 1.2rem;">Version 1.0</p>
+        <p style="font-size: 1.2rem;">Version 2.0</p>
         <p style="font-size: 1rem; margin-top: 4rem;">March 2026</p>
     </div>
 
@@ -148,7 +162,7 @@
             <tr><td>Phone</td><td>+254768784909</td></tr>
             <tr><td>GitHub</td><td><a href="https://github.com/Davismcintyre5" target="_blank">github.com/Davismcintyre5</a></td></tr>
             <tr><td>Live Application</td><td><a href="https://pharmasys.pxxl.click" target="_blank">pharmasys.pxxl.click</a></td></tr>
-            <tr><td>Backend API</td><td><a href="https://pharmasys-backend.pxxl.click" target="_blank">pharmasys-backend.pxxl.click</a></td></tr>
+            <tr><td>Backend API</td><td><a href="https://pharmasysserver.pxxl.click" target="_blank">pharmasysserver.pxxl.click</a></td></tr>
         </table>
     </div>
 
@@ -158,7 +172,6 @@
         <p>I would like to express my sincere gratitude to:</p>
         <ul>
             <li><strong>The MERN Stack Community</strong> – for the incredible open‑source tools and libraries that made this project possible.</li>
-            <li><strong>Icons8</strong> – for the beautiful pharmacy shop icon used as the application favicon.</li>
             <li><strong>All beta testers</strong> – who provided invaluable feedback during development.</li>
             <li><strong>My family</strong> – for their patience and support during countless hours of coding.</li>
         </ul>
@@ -167,7 +180,7 @@
     <!-- INTRODUCTION PAGE -->
     <div class="page-break">
         <h2>Introduction</h2>
-        <p>PharmaSys is a comprehensive, full‑stack pharmacy management system designed to streamline the daily operations of a modern pharmacy. Built with the MERN stack (MongoDB, Express.js, React, Node.js), it offers a robust, secure, and user‑friendly interface for managing inventory, patients, prescriptions, financial accounts, and more. The system is deployed and accessible online, demonstrating its production readiness.</p>
+        <p>PharmaSys is a comprehensive, full‑stack pharmacy management system designed to streamline the daily operations of a modern pharmacy. Built with the MERN stack (MongoDB, Express.js, React, Node.js), it offers a robust, secure, and user‑friendly interface for managing inventory, patients, prescriptions, financial accounts, invoices, withdrawals, and more. The system is deployed and accessible online, demonstrating its production readiness.</p>
         <p>This document provides a detailed overview of the system's architecture, features, technology stack, API endpoints, deployment procedures, and future roadmap. It serves as both a technical reference for developers and a project summary for stakeholders.</p>
     </div>
 
@@ -179,7 +192,7 @@
         <p>For licensing inquiries, please contact <a href="mailto:davismcintyre5@gmail.com">davismcintyre5@gmail.com</a>.</p>
     </div>
 
-    <!-- TABLE OF CONTENTS PAGE -->
+    <!-- TABLE OF CONTENTS -->
     <div class="page-break">
         <h2>Table of Contents</h2>
         <ul style="list-style-type: none; font-size: 1.2rem; line-height: 2;">
@@ -196,282 +209,196 @@
         <p style="margin-top: 2rem; color: #777;">(Page numbers are indicative in this HTML document.)</p>
     </div>
 
-    <!-- BODY – FEATURES -->
+    <!-- FEATURES -->
     <div class="page-break">
         <h2>1. Features</h2>
         <ul>
-            <li><span class="badge">Dashboard</span> – Real‑time overview of key metrics: current balance, today's revenue/expenses, low stock alerts, patient counts, and a 7‑day income chart.</li>
+            <li><span class="badge">Dashboard</span> – Real‑time overview: current balance, today's revenue/expenses, low stock alerts, patient counts, and 7‑day income chart.</li>
             <li><span class="badge">Inventory Management</span> – Full CRUD for medicines, batch tracking, expiry alerts, and low stock notifications.</li>
             <li><span class="badge">Patient Management</span> – Manage patient profiles, contact details, and prescription history.</li>
-            <li><span class="badge">Prescription Handling</span> – Upload, verify, and manage prescriptions with status tracking (pending, approved, dispensed, rejected).</li>
-            <li><span class="badge">Supplier Management</span> – Keep detailed records of medicine suppliers, including contact persons and addresses.</li>
-            <li><span class="badge">Financial Accounts</span> – Record income, expenses, and withdrawals; view current balance; print individual transaction receipts (with pharmacy name watermark).</li>
-            <li><span class="badge">Reporting Module</span> – Generate and print sales, inventory, and financial reports with custom date ranges; all printouts include a subtle pharmacy watermark.</li>
-            <li><span class="badge">User & Settings Management</span> – Admin panel for managing system users (CRUD) and configuring pharmacy details, currency, and tax rate.</li>
-            <li><span class="badge">Role‑Based Access Control</span> – Secure routes based on user roles: admin, pharmacist, cashier, manager.</li>
-            <li><span class="badge">Notifications</span> – In‑app alerts for low stock, expiring medicines, and prescription updates.</li>
+            <li><span class="badge">Prescription Handling</span> – Create, view, and fulfill prescriptions with stock auto‑deduction; creates pending transactions.</li>
+            <li><span class="badge">Supplier Management</span> – Keep detailed records of medicine suppliers.</li>
+            <li><span class="badge">Accounts & Approval Workflow</span> – Transactions require approval before affecting balance; admin/manager can approve/reject pending transactions.</li>
+            <li><span class="badge">Invoices</span> – Create invoices for patients (sale) or suppliers (purchase); mark paid creates pending transaction.</li>
+            <li><span class="badge">Withdrawals</span> – Request withdrawals; approval creates pending expense transaction.</li>
+            <li><span class="badge">Reporting Module</span> – Sales and inventory reports with custom date ranges; print with pharmacy watermark.</li>
+            <li><span class="badge">Print Functionality</span> – All lists and individual records have print buttons with footer (pharmacy name, generation details).</li>
+            <li><span class="badge">User & Settings Management</span> – Admin panel for user CRUD, role assignment, and pharmacy configuration (name, address, currency, tax rate).</li>
+            <li><span class="badge">Role‑Based Access Control</span> – Secure routes based on roles: admin, manager, pharmacist, cashier.</li>
         </ul>
     </div>
 
     <!-- TECHNOLOGY STACK -->
     <div class="page-break">
         <h2>2. Technology Stack</h2>
-        <h3>Frontend (React)</h3>
+        <h3>Frontend (React + Vite)</h3>
         <ul>
             <li><strong>React 18</strong> – Functional components, hooks, and context API.</li>
-            <li><strong>React Router v6</strong> – Client‑side routing with hash‑based strategy for easy static hosting.</li>
-            <li><strong>Redux Toolkit</strong> – State management for user authentication and global UI state.</li>
-            <li><strong>Formik & Yup</strong> – Form handling and validation.</li>
-            <li><strong>Chart.js & react-chartjs-2</strong> – Interactive dashboard charts.</li>
-            <li><strong>Axios</strong> – HTTP client for API communication.</li>
-            <li><strong>CSS3</strong> – Fully custom responsive design (no UI framework).</li>
+            <li><strong>React Router v6</strong> – Client‑side routing.</li>
+            <li><strong>Redux Toolkit</strong> – State management for authentication and UI.</li>
+            <li><strong>Axios</strong> – HTTP client with interceptors.</li>
+            <li><strong>Recharts</strong> – Dashboard charts.</li>
+            <li><strong>Tailwind CSS</strong> – Modern, responsive styling.</li>
+            <li><strong>Lucide React</strong> – Icon library.</li>
+            <li><strong>date-fns</strong> – Date formatting utilities.</li>
         </ul>
         <h3>Backend (Node.js + Express)</h3>
         <ul>
             <li><strong>Node.js</strong> – JavaScript runtime.</li>
-            <li><strong>Express.js</strong> – Web framework for building RESTful APIs.</li>
-            <li><strong>MongoDB + Mongoose ODM</strong> – Data modeling and persistence.</li>
-            <li><strong>JWT (JSON Web Tokens)</strong> – Authentication and authorization.</li>
-            <li><strong>Bcrypt.js</strong> – Password hashing.</li>
-            <li><strong>Multer</strong> – File uploads (prescription images).</li>
-            <li><strong>Node‑cron</strong> – Scheduled tasks (e.g., expiry alerts).</li>
-            <li><strong>Nodemailer / Twilio</strong> – Email/SMS notifications (optional, configured via environment).</li>
-            <li><strong>Winston</strong> – Logging.</li>
-            <li><strong>CORS</strong> – Configured for multiple origins (local and production).</li>
+            <li><strong>Express.js</strong> – RESTful API framework.</li>
+            <li><strong>MongoDB + Mongoose</strong> – Data modeling and persistence.</li>
+            <li><strong>JWT</strong> – Authentication and authorization.</li>
+            <li><strong>bcryptjs</strong> – Password hashing.</li>
+            <li><strong>helmet & compression</strong> – Security and performance.</li>
+            <li><strong>express-rate-limit</strong> – Rate limiting.</li>
+            <li><strong>CORS</strong> – Configured for production domains.</li>
         </ul>
     </div>
 
     <!-- SYSTEM ARCHITECTURE -->
     <div class="page-break">
         <h2>3. System Architecture</h2>
-        <p>The system follows a classic client‑server architecture with a clear separation between frontend and backend:</p>
+        <p>The system follows a client‑server architecture with a clear separation between frontend and backend:</p>
         <ul>
-            <li><strong>Client (React App):</strong> Served as static files from a web server (e.g., Nginx). All dynamic data is fetched via API calls to the backend.</li>
+            <li><strong>Client (React App):</strong> Served as static files. All dynamic data is fetched via API calls.</li>
             <li><strong>Server (Node.js/Express):</strong> Exposes RESTful API endpoints, handles authentication, business logic, and database interactions.</li>
-            <li><strong>Database (MongoDB):</strong> Stores all application data in collections: users, patients, medicines, suppliers, prescriptions, transactions, settings, notifications.</li>
+            <li><strong>Database (MongoDB):</strong> Stores all application data in collections: users, patients, medicines, prescriptions, suppliers, transactions, invoices, withdrawals, settings.</li>
         </ul>
-        <p>Communication between client and server is stateless; each request includes a JWT token for authentication. The frontend uses hash‑based routing, allowing it to be hosted on any static server without special configuration.</p>
+        <p>Communication is stateless; each request includes a JWT token for authentication. Transactions require approval workflow; only completed transactions affect financial summaries.</p>
     </div>
 
     <!-- DATABASE SCHEMA -->
     <div class="page-break">
         <h2>4. Database Schema (MongoDB Collections)</h2>
+        
         <h3>users</h3>
-        <ul>
-            <li><code>name</code> (String)</li>
-            <li><code>email</code> (String, unique)</li>
-            <li><code>password</code> (String, hashed)</li>
-            <li><code>role</code> (String, enum: admin, pharmacist, cashier, manager)</li>
-            <li><code>createdAt</code> (Date)</li>
-        </ul>
+        <ul><li>username, email, passwordHash, role, isActive, lastLogin, createdAt, updatedAt</li></ul>
+        
         <h3>patients</h3>
-        <ul>
-            <li><code>name</code> (String)</li>
-            <li><code>phone</code> (String)</li>
-            <li><code>email</code> (String)</li>
-            <li><code>address</code> (String)</li>
-            <li><code>dateOfBirth</code> (Date)</li>
-            <li><code>allergies</code> (Array)</li>
-            <li><code>prescriptions</code> (Array of ObjectIds referencing prescriptions)</li>
-            <li><code>loyaltyPoints</code> (Number)</li>
-        </ul>
+        <ul><li>firstName, lastName, dateOfBirth, gender, phone, email, address</li></ul>
+        
         <h3>medicines</h3>
-        <ul>
-            <li><code>name</code> (String)</li>
-            <li><code>genericName</code> (String)</li>
-            <li><code>category</code> (String)</li>
-            <li><code>manufacturer</code> (String)</li>
-            <li><code>price</code> (Number)</li>
-            <li><code>cost</code> (Number)</li>
-            <li><code>stock</code> (Number)</li>
-            <li><code>reorderLevel</code> (Number)</li>
-            <li><code>batches</code> (Array of subdocuments: batchNo, expiryDate, quantity, supplier)</li>
-            <li><code>requiresPrescription</code> (Boolean)</li>
-        </ul>
+        <ul><li>name, genericName, category, supplier, unitPrice, currentStock, reorderLevel, expiryDate</li></ul>
+        
         <h3>suppliers</h3>
-        <ul>
-            <li><code>name</code> (String)</li>
-            <li><code>contactPerson</code> (String)</li>
-            <li><code>phone</code> (String)</li>
-            <li><code>email</code> (String)</li>
-            <li><code>address</code> (String)</li>
-        </ul>
+        <ul><li>name, contactPerson, phone, email, address</li></ul>
+        
         <h3>prescriptions</h3>
-        <ul>
-            <li><code>patientId</code> (ObjectId)</li>
-            <li><code>doctorName</code> (String)</li>
-            <li><code>issueDate</code> (Date)</li>
-            <li><code>expiryDate</code> (Date)</li>
-            <li><code>items</code> (Array: medicineId, dosage, duration, quantity)</li>
-            <li><code>status</code> (String: pending, approved, dispensed, rejected)</li>
-            <li><code>uploadedBy</code> (ObjectId)</li>
-            <li><code>imageUrl</code> (String)</li>
-        </ul>
-        <h3>accounttransactions</h3>
-        <ul>
-            <li><code>type</code> (String: income, expense, withdrawal)</li>
-            <li><code>amount</code> (Number)</li>
-            <li><code>description</code> (String)</li>
-            <li><code>date</code> (Date)</li>
-            <li><code>createdBy</code> (ObjectId)</li>
-            <li><code>reference</code> (String)</li>
-        </ul>
-        <h3>settings</h3>
-        <ul>
-            <li><code>pharmacyName</code> (String)</li>
-            <li><code>address</code> (String)</li>
-            <li><code>phone</code> (String)</li>
-            <li><code>email</code> (String)</li>
-            <li><code>licenseNumber</code> (String)</li>
-            <li><code>currency</code> (String, default: KES)</li>
-            <li><code>taxRate</code> (Number)</li>
-        </ul>
-        <h3>notifications</h3>
-        <ul>
-            <li><code>userId</code> (ObjectId)</li>
-            <li><code>type</code> (String: stock, expiry, prescription, general)</li>
-            <li><code>message</code> (String)</li>
-            <li><code>read</code> (Boolean)</li>
-            <li><code>createdAt</code> (Date)</li>
-        </ul>
+        <ul><li>patient, prescribedBy, datePrescribed, status, totalAmount, createdBy</li></ul>
+        
+        <h3>prescriptionItems</h3>
+        <ul><li>prescription, medicine, quantity, instruction</li></ul>
+        
+        <h3>transactions</h3>
+        <ul><li>type (sale/expense), reference, amount, paymentMethod, description, status (pending/completed/rejected), approvedBy, approvedAt, rejectionReason, createdBy</li></ul>
+        
+        <h3>invoices</h3>
+        <ul><li>invoiceNumber, type (sale/purchase), amount, dueDate, status, client, clientModel, items, transaction, createdBy</li></ul>
+        
+        <h3>withdrawals</h3>
+        <ul><li>amount, reason, status, requestedBy, approvedBy, approvedAt, rejectionReason, transaction</li></ul>
+        
+        <h3>pharmacysettings</h3>
+        <ul><li>name, address, phone, email, logo, currency, taxRate, businessReg, watermarkEnabled, updatedBy</li></ul>
+        
+        <h3>auditlogs</h3>
+        <ul><li>user, action, details, ipAddress</li></ul>
     </div>
 
     <!-- API DOCUMENTATION -->
     <div class="page-break">
         <h2>5. API Documentation</h2>
-        <p>Base URL: <code>https://pharmasys-backend.pxxl.click/api</code></p>
+        <p>Base URL: <code>https://pharmasysserver.pxxl.click/api</code></p>
         <p>All protected endpoints require a valid JWT token in the <code>Authorization: Bearer &lt;token&gt;</code> header.</p>
 
         <h3>Authentication</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>POST</td><td>/auth/login</td><td>Login and receive token</td></tr>
-            <tr><td>GET</td><td>/auth/me</td><td>Get current user details</td></tr>
-        </table>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>POST</td><td>/auth/login</td><td>Login and receive token</td></tr>
+        <tr><td>GET</td><td>/auth/me</td><td>Get current user details</td></tr></table>
 
-        <h3>Users (Admin only)</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/users</td><td>List all users</td></tr>
-            <tr><td>POST</td><td>/users</td><td>Create a new user</td></tr>
-            <tr><td>PUT</td><td>/users/:id</td><td>Update a user</td></tr>
-            <tr><td>DELETE</td><td>/users/:id</td><td>Delete a user</td></tr>
-            <tr><td>PUT</td><td>/users/changepassword</td><td>Change logged‑in user's password</td></tr>
-        </table>
+        <h3>Users (Admin/Manager)</h3>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>GET</td><td>/settings/users</td><td>List all users</td></tr>
+        <tr><td>POST</td><td>/settings/users</td><td>Create a new user</td></tr>
+        <tr><td>PUT</td><td>/settings/users/:id</td><td>Update user (role, status)</td></tr>
+        <tr><td>DELETE</td><td>/settings/users/:id</td><td>Delete a user</td></tr>
+        <tr><td>PUT</td><td>/settings/profile/password</td><td>Change password</td></tr></table>
 
         <h3>Medicines</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/medicines</td><td>Get all medicines</td></tr>
-            <tr><td>GET</td><td>/medicines/:id</td><td>Get a single medicine</td></tr>
-            <tr><td>POST</td><td>/medicines</td><td>Add a new medicine</td></tr>
-            <tr><td>PUT</td><td>/medicines/:id</td><td>Update a medicine</td></tr>
-            <tr><td>DELETE</td><td>/medicines/:id</td><td>Delete a medicine</td></tr>
-        </table>
-
-        <h3>Patients</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/patients</td><td>Get all patients</td></tr>
-            <tr><td>GET</td><td>/patients/:id</td><td>Get a single patient</td></tr>
-            <tr><td>POST</td><td>/patients</td><td>Add a new patient</td></tr>
-            <tr><td>PUT</td><td>/patients/:id</td><td>Update a patient</td></tr>
-            <tr><td>DELETE</td><td>/patients/:id</td><td>Delete a patient</td></tr>
-        </table>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>GET</td><td>/medicines</td><td>Get all medicines</td></tr>
+        <tr><td>POST</td><td>/medicines</td><td>Add a new medicine</td></tr>
+        <tr><td>PUT</td><td>/medicines/:id</td><td>Update a medicine</td></tr>
+        <tr><td>DELETE</td><td>/medicines/:id</td><td>Delete a medicine</td></tr>
+        <tr><td>GET</td><td>/medicines/low-stock</td><td>Get low stock medicines</td></tr></table>
 
         <h3>Prescriptions</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/prescriptions</td><td>Get all prescriptions</td></tr>
-            <tr><td>GET</td><td>/prescriptions/:id</td><td>Get a single prescription</td></tr>
-            <tr><td>POST</td><td>/prescriptions</td><td>Create a new prescription</td></tr>
-            <tr><td>PUT</td><td>/prescriptions/:id</td><td>Update a prescription</td></tr>
-            <tr><td>DELETE</td><td>/prescriptions/:id</td><td>Delete a prescription</td></tr>
-        </table>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>GET</td><td>/prescriptions</td><td>Get all prescriptions</td></tr>
+        <tr><td>POST</td><td>/prescriptions</td><td>Create a prescription</td></tr>
+        <tr><td>PUT</td><td>/prescriptions/:id</td><td>Update status (fulfill/cancel)</td></tr></table>
 
-        <h3>Suppliers</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/suppliers</td><td>Get all suppliers</td></tr>
-            <tr><td>GET</td><td>/suppliers/:id</td><td>Get a single supplier</td></tr>
-            <tr><td>POST</td><td>/suppliers</td><td>Add a new supplier</td></tr>
-            <tr><td>PUT</td><td>/suppliers/:id</td><td>Update a supplier</td></tr>
-            <tr><td>DELETE</td><td>/suppliers/:id</td><td>Delete a supplier</td></tr>
-        </table>
+        <h3>Transactions</h3>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>GET</td><td>/transactions</td><td>Get all transactions (filterable)</td></tr>
+        <tr><td>POST</td><td>/transactions</td><td>Create a transaction (pending)</td></tr>
+        <tr><td>DELETE</td><td>/transactions/:id</td><td>Delete a pending transaction</td></tr>
+        <tr><td>GET</td><td>/transactions/:id/print</td><td>Print transaction receipt</td></tr></table>
 
-        <h3>Accounts</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/accounts/balance</td><td>Get current account balance</td></tr>
-            <tr><td>GET</td><td>/accounts/transactions</td><td>List all transactions</td></tr>
-            <tr><td>POST</td><td>/accounts/transactions</td><td>Create a new transaction</td></tr>
-            <tr><td>PUT</td><td>/accounts/transactions/:id</td><td>Update a transaction</td></tr>
-            <tr><td>DELETE</td><td>/accounts/transactions/:id</td><td>Delete a transaction</td></tr>
-        </table>
+        <h3>Accounts (Admin/Manager)</h3>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>GET</td><td>/accounts/balance</td><td>Get current balance</td></tr>
+        <tr><td>GET</td><td>/accounts/transactions</td><td>Get transactions with filters</td></tr>
+        <tr><td>PUT</td><td>/accounts/transactions/:id/approve</td><td>Approve transaction</td></tr>
+        <tr><td>PUT</td><td>/accounts/transactions/:id/reject</td><td>Reject transaction</td></tr>
+        <tr><td>GET</td><td>/accounts/pending-approvals</td><td>Get counts of pending items</td></tr></table>
 
-        <h3>Reports</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/reports/sales</td><td>Generate sales report</td></tr>
-            <tr><td>GET</td><td>/reports/inventory</td><td>Generate inventory report</td></tr>
-            <tr><td>GET</td><td>/reports/financial</td><td>Generate financial report</td></tr>
-        </table>
+        <h3>Invoices</h3>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>POST</td><td>/invoices</td><td>Create invoice</td></tr>
+        <tr><td>GET</td><td>/invoices</td><td>Get all invoices</td></tr>
+        <tr><td>PUT</td><td>/invoices/:id</td><td>Update invoice (mark paid)</td></tr>
+        <tr><td>GET</td><td>/invoices/:id/print</td><td>Print invoice</td></tr>
+        <tr><td>POST</td><td>/invoices/:id/send</td><td>Send invoice via SMS/email</td></tr></table>
 
-        <h3>Dashboard</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/dashboard/stats</td><td>Get aggregated stats for dashboard</td></tr>
-        </table>
-
-        <h3>Settings</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/settings</td><td>Get pharmacy settings</td></tr>
-            <tr><td>PUT</td><td>/settings</td><td>Update pharmacy settings (admin only)</td></tr>
-        </table>
-
-        <h3>Notifications</h3>
-        <table>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
-            <tr><td>GET</td><td>/notifications</td><td>List all notifications for the user</td></tr>
-            <tr><td>PUT</td><td>/notifications/:id/read</td><td>Mark a notification as read</td></tr>
-        </table>
+        <h3>Withdrawals</h3>
+        <table><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td>POST</td><td>/withdrawals</td><td>Request withdrawal</td></tr>
+        <tr><td>GET</td><td>/withdrawals</td><td>Get withdrawals</td></tr>
+        <tr><td>PUT</td><td>/withdrawals/:id/approve</td><td>Approve withdrawal</td></tr>
+        <tr><td>PUT</td><td>/withdrawals/:id/reject</td><td>Reject withdrawal</td></tr></table>
     </div>
 
-    <!-- SECURITY CONSIDERATIONS -->
+    <!-- SECURITY -->
     <div class="page-break">
         <h2>6. Security Considerations</h2>
         <ul>
             <li><strong>Authentication:</strong> JWT tokens with expiration; passwords hashed with bcrypt.</li>
-            <li><strong>Authorization:</strong> Role‑based middleware protects routes (e.g., admin‑only endpoints).</li>
-            <li><strong>CORS:</strong> Configured to allow only trusted origins (localhost, live domain).</li>
-            <li><strong>Input Validation:</strong> Request data validated using express‑validator and Mongoose schemas.</li>
-            <li><strong>Environment Variables:</strong> Sensitive keys (JWT secret, database URI) stored in .env, never committed.</li>
-            <li><strong>Helmet.js:</strong> (Optional) Used to set secure HTTP headers.</li>
-            <li><strong>Data Encryption:</strong> All traffic over HTTPS in production.</li>
+            <li><strong>Authorization:</strong> Role‑based middleware protects routes.</li>
+            <li><strong>CORS:</strong> Configured to allow only trusted origins.</li>
+            <li><strong>Input Validation:</strong> Request data validated via Mongoose schemas.</li>
+            <li><strong>Environment Variables:</strong> Sensitive keys stored in .env, never committed.</li>
+            <li><strong>Helmet.js:</strong> Sets secure HTTP headers in production.</li>
+            <li><strong>Rate Limiting:</strong> 100 requests per 15 minutes per IP.</li>
+            <li><strong>HTTPS:</strong> All traffic encrypted in production.</li>
         </ul>
     </div>
 
-    <!-- DEPLOYMENT GUIDE -->
+    <!-- DEPLOYMENT -->
     <div class="page-break">
         <h2>7. Deployment Guide</h2>
         <h3>Backend</h3>
         <ol>
-            <li>Set <code>NODE_ENV=production</code> and configure environment variables on the server.</li>
-            <li>Use a process manager like <strong>PM2</strong>: <code>pm2 start server.js --name pharmasys-backend</code></li>
-            <li>Set up a reverse proxy (e.g., Nginx) to forward requests to port 5000 and enable SSL.</li>
+            <li>Set <code>NODE_ENV=production</code> and configure environment variables.</li>
+            <li>Use process manager: <code>pm2 start server.js --name pharmasys-backend</code></li>
+            <li>Set up reverse proxy with SSL.</li>
         </ol>
         <h3>Frontend</h3>
         <ol>
-            <li>Build the React app: <code>npm run build</code> (ensure <code>REACT_APP_API_URL</code> points to the live backend).</li>
-            <li>Upload the contents of the <code>build/</code> folder to your web server's document root.</li>
-            <li>Configure the server to serve <code>index.html</code> for all routes (for client‑side routing). Example Nginx:</li>
+            <li>Set <code>VITE_API_URL=https://pharmasysserver.pxxl.click/api</code></li>
+            <li>Build: <code>npm run build</code></li>
+            <li>Upload <code>dist/</code> folder to static hosting.</li>
         </ol>
-        <pre style="background: #f4f4f4; padding: 1rem; border-radius: 5px;">
-location / {
-    try_files $uri /index.html;
-}
-        </pre>
         <p>Both services are currently live at the URLs provided.</p>
     </div>
 
@@ -479,20 +406,20 @@ location / {
     <div class="page-break">
         <h2>8. Future Enhancements</h2>
         <ul>
-            <li><strong>Mobile App:</strong> Develop a React Native version for pharmacists on the go.</li>
-            <li><strong>Barcode Scanning:</strong> Integrate barcode scanning for faster checkout and inventory.</li>
-            <li><strong>Insurance Integration:</strong> Direct API connection to insurance providers for claim processing.</li>
-            <li><strong>Automated SMS/Email Reminders:</strong> For prescription refills and appointment reminders.</li>
-            <li><strong>Advanced Analytics:</strong> More detailed sales trends, patient demographics, and forecasting.</li>
-            <li><strong>Multi‑branch Support:</strong> Allow a single instance to manage multiple pharmacy locations.</li>
+            <li><strong>Mobile App:</strong> React Native version for on‑the‑go access.</li>
+            <li><strong>Barcode Scanning:</strong> Faster checkout and inventory management.</li>
+            <li><strong>Insurance Integration:</strong> Direct claim processing.</li>
+            <li><strong>Automated Reminders:</strong> SMS/email for prescription refills.</li>
+            <li><strong>Advanced Analytics:</strong> Sales trends, patient demographics, forecasting.</li>
+            <li><strong>Multi‑branch Support:</strong> Single instance for multiple locations.</li>
         </ul>
     </div>
 
     <!-- CONCLUSION -->
     <div class="page-break">
         <h2>9. Conclusion</h2>
-        <p>PharmaSys successfully delivers a modern, reliable, and secure solution for pharmacy management. Its modular architecture, comprehensive feature set, and professional frontend make it suitable for real‑world deployment. The system is already live and has been tested with real data, demonstrating its readiness for production use.</p>
-        <p>We welcome contributions and feedback. For any inquiries, please contact the developer.</p>
+        <p>PharmaSys successfully delivers a modern, reliable, and secure solution for pharmacy management. Its modular architecture, comprehensive feature set (including approval workflows, invoices, withdrawals), and professional frontend make it suitable for real‑world deployment. The system is already live and ready for production use.</p>
+        <p>For inquiries, please contact the developer.</p>
         <div class="end-marker">— End of Document —</div>
     </div>
 
