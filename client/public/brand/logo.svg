@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" width="512" height="512">
+  <defs>
+    <linearGradient id="ps-logo-round" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="100%" stop-color="#0EA5A4"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="256" cy="256" r="256" fill="#0F172A"/>
+
+  <g transform="translate(186 168)">
+    <rect x="0" y="0" width="140" height="94" rx="47" fill="url(#ps-logo-round)"/>
+    <rect x="70" y="0" width="70" height="94" rx="47" fill="#FFFFFF"/>
+    <circle cx="70" cy="47" r="47" fill="url(#ps-logo-round)"/>
+  </g>
+
+  <path d="M206 302 L256 240 L306 302 Z" fill="#22D3EE" opacity="0.95"/>
+
+  <text x="256" y="380"
+        text-anchor="middle"
+        font-family="'Inter','Segoe UI',system-ui,-apple-system,sans-serif"
+        font-size="56" font-weight="700" fill="#FFFFFF"
+        letter-spacing="-1">
+    Pharma<tspan fill="#22D3EE">Sys</tspan>
+  </text>
+</svg>
