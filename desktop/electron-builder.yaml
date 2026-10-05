@@ -1,0 +1,51 @@
+appId: com.hdm.pharmasys
+productName: PharmaSys
+copyright: Copyright © 2026 HDM - Davis Okoth
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - assets/**/*
+  - public/**/*
+  - package.json
+
+extraResources:
+  - from: assets
+    to: assets
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/icon.ico
+  artifactName: PharmaSys-Setup-${version}.exe
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerHeaderIcon: assets/icon.ico
+
+mac:
+  target: dmg
+  icon: assets/icon.png
+  category: public.app-category.business
+
+linux:
+  target: AppImage
+  icon: assets/icon.png
+  category: Office
+
+publish:
+  provider: github
+  owner: Davismcintyre5
+  repo: PharmaSys
+  releaseType: release
+  publishAutoUpdate: true

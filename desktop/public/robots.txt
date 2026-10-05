@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /app/
+Disallow: /pending
+Disallow: /invoice/
+Disallow: /reset-password
+Disallow: /accept-invite
+
+Sitemap: https://pharmasys.co.ke/sitemap.xml

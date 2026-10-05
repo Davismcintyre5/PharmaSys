@@ -1,14 +1,23 @@
 const crypto = require('crypto');
 const { asyncHandler } = require('../../utils/asyncHandler');
-const { ok, created, paginated } = require('../../utils/apiResponse');
+const { ok, created, paginated, noContent } = require('../../utils/apiResponse');
 const { parsePagination } = require('../../utils/pagination');
 const { assertObjectId } = require('../../utils/validateObjectId');
 const { ApiError } = require('../../utils/apiError');
 
 const PurchaseOrder = require('../../models/client/PurchaseOrder');
 const Supplier = require('../../models/client/Supplier');
+const Branch = require('../../models/client/Branch');
+const Tenant = require('../../models/admin/Tenant');
+const User = require('../../models/client/User');
 const { Drug, Batch, StockMovement } = require('../../models/client/Inventory');
 const emailService = require('../../services/emailService');
+const notificationService = require('../../services/notificationService');
+const { logger } = require('../../utils/logger');
+
+/* ═════════════════════════════════════════════════════════════════
+   Helpers
+   ═════════════════════════════════════════════════════════════════ */
 
 function generatePoNo() {
   const now = new Date();
@@ -18,6 +27,10 @@ function generatePoNo() {
   const rand = crypto.randomBytes(2).toString('hex').toUpperCase();
   return `PO-${y}${m}${d}-${rand}`;
 }
+
+/* ═════════════════════════════════════════════════════════════════
+   LIST
+   ═════════════════════════════════════════════════════════════════ */
 
 const list = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -39,6 +52,10 @@ const list = asyncHandler(async (req, res) => {
   return paginated(res, items, page, limit, total);
 });
 
+/* ═════════════════════════════════════════════════════════════════
+   GET
+   ═════════════════════════════════════════════════════════════════ */
+
 const get = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'poId');
   const po = await PurchaseOrder.findOne({
@@ -46,11 +63,15 @@ const get = asyncHandler(async (req, res) => {
     _id: req.params.id,
     tenantId: req.tenantId,
   })
-    .populate('supplierId', 'name email phone contactPerson')
+    .populate('supplierId', 'name email phone contactPerson address')
     .lean();
   if (!po) throw ApiError.notFound('PO_NOT_FOUND', 'Purchase order not found');
   return ok(res, po);
 });
+
+/* ═════════════════════════════════════════════════════════════════
+   CREATE — always a draft
+   ═════════════════════════════════════════════════════════════════ */
 
 const create = asyncHandler(async (req, res) => {
   const { supplierId, items, notes = null } = req.body;
@@ -91,29 +112,110 @@ const create = asyncHandler(async (req, res) => {
     createdBy: req.user._id,
   });
 
-  if (supplier.email) {
+  /* Draft only — no email, no notification. That happens on `send`. */
+  return created(res, po.toObject());
+});
+
+/* ═════════════════════════════════════════════════════════════════
+   SEND — draft → ordered, emails the supplier
+   ═════════════════════════════════════════════════════════════════ */
+
+const send = asyncHandler(async (req, res) => {
+  assertObjectId(req.params.id, 'poId');
+
+  const po = await PurchaseOrder.findOne({
+    __allowGlobal: true,
+    _id: req.params.id,
+    tenantId: req.tenantId,
+  });
+
+  if (!po) throw ApiError.notFound('PO_NOT_FOUND', 'Purchase order not found');
+  if (po.status !== 'draft') {
+    throw ApiError.badRequest(
+      'NOT_DRAFT',
+      `Only draft purchase orders can be sent (current status: ${po.status})`
+    );
+  }
+  if (!po.items?.length) {
+    throw ApiError.badRequest('EMPTY_PO', 'Cannot send an empty purchase order');
+  }
+
+  const [supplier, tenant, branch] = await Promise.all([
+    Supplier.findOne({ __allowGlobal: true, _id: po.supplierId }).lean(),
+    Tenant.findById(req.tenantId).select('name settings').lean(),
+    Branch.findById(po.branchId).select('name address phone').lean(),
+  ]);
+
+  const supplierName = supplier?.name || 'Supplier';
+
+  /* Mark as ordered FIRST so a failed email doesn't leave the PO unsent. */
+  po.status = 'ordered';
+  po.sentAt = new Date();
+  po.sentBy = req.user._id;
+  await po.save();
+
+  /* Fire the email — non-blocking. Failures are logged, not surfaced. */
+  if (supplier?.email) {
     emailService
       .sendPurchaseOrder({
         tenantId: req.tenantId,
         to: supplier.email,
-        businessName: 'Your Pharmacy',
-        supplierName: supplier.name,
+        businessName: tenant?.name || 'Pharmacy',
+        supplierName,
         poNumber: po.poNo,
-        items: resolvedItems,
+        items: po.items.map((i) => ({
+          name: i.name || 'Item',
+          qty: i.qty,
+          unitCost: i.costPrice,
+          subtotal: i.total,
+        })),
         subtotal: po.subtotal,
         tax: po.tax,
         shipping: 0,
         total: po.total,
-        currency: 'KES',
-        notes,
+        currency: tenant?.settings?.currency || 'KES',
+        expectedAt: null,
+        notes: po.notes,
         pdfUrl: null,
-        businessContact: null,
+        businessContact: {
+          name: tenant?.name,
+          phone: branch?.phone,
+          email: null,
+          address: branch?.address,
+        },
       })
-      .catch(() => {});
+      .catch((err) =>
+        logger.warn(
+          { err: err.message, poId: String(po._id), to: supplier.email },
+          'PO email failed — PO marked as sent anyway'
+        )
+      );
+  } else {
+    logger.info(
+      { poId: String(po._id), supplierId: String(po.supplierId) },
+      'PO sent but supplier has no email — nothing to send'
+    );
   }
 
-  return created(res, po.toObject());
+  /* Notify branch managers */
+  notificationService
+    .notifyBranchManagers({
+      tenantId: req.tenantId,
+      branchId: po.branchId,
+      type: 'inventory',
+      title: `Purchase order sent — ${po.poNo}`,
+      body: `${po.items.length} line(s) sent to ${supplierName}`,
+      link: `/app/purchase-orders/${po._id}`,
+      meta: { poId: String(po._id) },
+    })
+    .catch(() => {});
+
+  return ok(res, po.toObject());
 });
+
+/* ═════════════════════════════════════════════════════════════════
+   RECEIVE — ordered → received, creates batches
+   ═════════════════════════════════════════════════════════════════ */
 
 const receive = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'poId');
@@ -128,7 +230,19 @@ const receive = asyncHandler(async (req, res) => {
     tenantId: req.tenantId,
   });
   if (!po) throw ApiError.notFound('PO_NOT_FOUND', 'Purchase order not found');
-  if (po.status === 'received') throw ApiError.badRequest('ALREADY_RECEIVED', 'PO already received');
+
+  if (po.status === 'received') {
+    throw ApiError.badRequest('ALREADY_RECEIVED', 'PO already received');
+  }
+  if (po.status === 'cancelled') {
+    throw ApiError.badRequest('PO_CANCELLED', 'Cannot receive a cancelled PO');
+  }
+  if (po.status !== 'ordered') {
+    throw ApiError.badRequest(
+      'NOT_SENT',
+      `Send the purchase order to the supplier before receiving (current status: ${po.status})`
+    );
+  }
 
   const branchId = po.branchId;
 
@@ -175,8 +289,38 @@ const receive = asyncHandler(async (req, res) => {
   po.receivedAt = new Date();
   await po.save();
 
+  const tenant = await Tenant.findById(req.tenantId).select('name').lean();
+  const branch = await Branch.findById(branchId).select('name').lean();
+
+  const recipients = await User.find({
+    __allowGlobal: true,
+    tenantId: req.tenantId,
+    status: 'active',
+    $or: [{ role: 'owner' }, { role: 'branch_manager', branchIds: branchId }],
+  })
+    .select('_id')
+    .lean();
+
+  for (const r of recipients) {
+    notificationService
+      .create({
+        tenantId: req.tenantId,
+        userId: r._id,
+        branchId,
+        type: 'inventory',
+        title: `Stock received — ${po.poNo}`,
+        body: `${items.length} line(s) received${branch?.name ? ` at ${branch.name}` : ''}`,
+        link: `/app/purchase-orders/${po._id}`,
+      })
+      .catch(() => {});
+  }
+
   return ok(res, po.toObject());
 });
+
+/* ═════════════════════════════════════════════════════════════════
+   CANCEL
+   ═════════════════════════════════════════════════════════════════ */
 
 const cancel = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'poId');
@@ -188,7 +332,16 @@ const cancel = asyncHandler(async (req, res) => {
     tenantId: req.tenantId,
   });
   if (!po) throw ApiError.notFound('PO_NOT_FOUND', 'Purchase order not found');
-  if (po.status === 'received') throw ApiError.badRequest('CANNOT_CANCEL_RECEIVED', 'Cannot cancel a received PO');
+
+  if (po.status === 'received') {
+    throw ApiError.badRequest(
+      'CANNOT_CANCEL_RECEIVED',
+      'Cannot cancel a received PO. Its batches already exist.'
+    );
+  }
+  if (po.status === 'cancelled') {
+    throw ApiError.badRequest('ALREADY_CANCELLED', 'PO is already cancelled');
+  }
 
   po.status = 'cancelled';
   po.notes = `${po.notes || ''}\nCancelled: ${reason || 'no reason'}`.trim();
@@ -211,4 +364,50 @@ const cancel = asyncHandler(async (req, res) => {
   return ok(res, po.toObject());
 });
 
-module.exports = { list, get, create, receive, cancel };
+/* ═════════════════════════════════════════════════════════════════
+   REMOVE — soft (cancel) or hard (delete)
+   ═════════════════════════════════════════════════════════════════ */
+
+const remove = asyncHandler(async (req, res) => {
+  assertObjectId(req.params.id, 'poId');
+  const hard = String(req.query.hard) === 'true';
+
+  if (hard && req.user.role !== 'owner') {
+    throw ApiError.forbidden('ONLY_OWNER', 'Only the owner can permanently delete purchase orders');
+  }
+
+  const po = await PurchaseOrder.findOne({
+    __allowGlobal: true,
+    _id: req.params.id,
+    tenantId: req.tenantId,
+  });
+  if (!po) throw ApiError.notFound('PO_NOT_FOUND', 'Purchase order not found');
+
+  if (hard) {
+    if (!['draft', 'cancelled'].includes(po.status)) {
+      throw ApiError.badRequest(
+        'PO_NOT_DELETABLE',
+        `Only draft or cancelled purchase orders can be deleted (current status: ${po.status})`
+      );
+    }
+
+    await PurchaseOrder.deleteOne({ _id: po._id });
+    return ok(res, { deleted: true, permanent: true });
+  }
+
+  /* Soft delete = cancel */
+  if (po.status === 'cancelled') return noContent(res);
+
+  if (po.status === 'received') {
+    throw ApiError.badRequest(
+      'CANNOT_CANCEL_RECEIVED',
+      'Cannot cancel a received PO. Its batches already exist.'
+    );
+  }
+
+  po.status = 'cancelled';
+  await po.save();
+  return noContent(res);
+});
+
+module.exports = { list, get, create, send, receive, cancel, remove };

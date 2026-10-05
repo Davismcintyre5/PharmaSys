@@ -3,12 +3,15 @@ const { ok, created, noContent, paginated } = require('../../utils/apiResponse')
 const { parsePagination } = require('../../utils/pagination');
 const { assertObjectId } = require('../../utils/validateObjectId');
 const { ApiError } = require('../../utils/apiError');
+const { toObjectId } = require('../../utils/objectId');
 
 const { Drug, Batch, StockMovement } = require('../../models/client/Inventory');
 const Tenant = require('../../models/admin/Tenant');
 const Plan = require('../../models/admin/Plan');
 
-/* ─────────────── DRUGS ─────────────── */
+/* ═════════════════════════════════════════════════════════════════
+   DRUGS
+   ═════════════════════════════════════════════════════════════════ */
 
 const listDrugs = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -23,11 +26,64 @@ const listDrugs = asyncHandler(async (req, res) => {
   if (req.query.category) filter.category = req.query.category;
 
   const [items, total] = await Promise.all([
-    Drug.find({ __allowGlobal: true, ...filter }).sort({ name: 1 }).skip(skip).limit(limit).lean(),
+    Drug.find({ __allowGlobal: true, ...filter })
+      .sort({ name: 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
     Drug.countDocuments({ __allowGlobal: true, ...filter }),
   ]);
 
-  return paginated(res, items, page, limit, total);
+  // Enrich with stock + last selling/cost price per drug
+  let enriched = items;
+  if (items.length) {
+    const drugIds = items.map((d) => d._id);
+    const tenantObjId = toObjectId(req.tenantId);
+    const branchObjId = req.branchId ? toObjectId(req.branchId) : null;
+    const branchFilter = branchObjId ? { branchId: branchObjId } : {};
+
+    const [branchAgg, totalAgg] = await Promise.all([
+      Batch.aggregate([
+        {
+          $match: {
+            tenantId: tenantObjId,
+            drugId: { $in: drugIds },
+            ...branchFilter,
+          },
+        },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$drugId',
+            qty: { $sum: '$qty' },
+            lastSellingPrice: { $first: '$sellingPrice' },
+            lastCostPrice: { $first: '$costPrice' },
+          },
+        },
+      ]),
+      Batch.aggregate([
+        { $match: { tenantId: tenantObjId, drugId: { $in: drugIds } } },
+        { $group: { _id: '$drugId', qty: { $sum: '$qty' } } },
+      ]),
+    ]);
+
+    const branchStats = Object.fromEntries(branchAgg.map((r) => [String(r._id), r]));
+    const totalStats = Object.fromEntries(totalAgg.map((r) => [String(r._id), r]));
+
+    enriched = items.map((d) => {
+      const b = branchStats[String(d._id)];
+      const t = totalStats[String(d._id)];
+      return {
+        ...d,
+        currentQty: b?.qty ?? 0,
+        totalQtyAllBranches: t?.qty ?? 0,
+        lastSellingPrice: b?.lastSellingPrice ?? 0,
+        lastCostPrice: b?.lastCostPrice ?? 0,
+      };
+    });
+  }
+
+  return paginated(res, enriched, page, limit, total);
 });
 
 const getDrug = asyncHandler(async (req, res) => {
@@ -94,19 +150,54 @@ const updateDrug = asyncHandler(async (req, res) => {
 
 const removeDrug = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'drugId');
-  const result = await Drug.updateOne(
-    { __allowGlobal: true, _id: req.params.id, tenantId: req.tenantId },
-    { $set: { isActive: false } }
-  );
-  if (result.matchedCount === 0) throw ApiError.notFound('DRUG_NOT_FOUND', 'Drug not found');
+  const hard = String(req.query.hard) === 'true';
+
+  if (hard && req.user.role !== 'owner') {
+    throw ApiError.forbidden('ONLY_OWNER', 'Only the owner can permanently delete drugs');
+  }
+
+  const drug = await Drug.findOne({
+    __allowGlobal: true,
+    _id: req.params.id,
+    tenantId: req.tenantId,
+  }).lean();
+  if (!drug) throw ApiError.notFound('DRUG_NOT_FOUND', 'Drug not found');
+
+  if (hard) {
+    const [batchCount, movementCount] = await Promise.all([
+      Batch.countDocuments({ __allowGlobal: true, tenantId: req.tenantId, drugId: drug._id }),
+      StockMovement.countDocuments({ __allowGlobal: true, tenantId: req.tenantId, drugId: drug._id }),
+    ]);
+
+    if (batchCount > 0 || movementCount > 0) {
+      throw ApiError.badRequest(
+        'DRUG_HAS_HISTORY',
+        `Cannot delete: ${batchCount} batch(es) and ${movementCount} movement(s) reference this drug. Deactivate instead.`
+      );
+    }
+
+    await Drug.deleteOne({ _id: drug._id });
+    return ok(res, { deleted: true, permanent: true });
+  }
+
+  await Drug.updateOne({ _id: drug._id }, { $set: { isActive: false } });
   return noContent(res);
 });
 
-/* ─────────────── BATCHES ─────────────── */
+/* ═════════════════════════════════════════════════════════════════
+   BATCHES
+   ═════════════════════════════════════════════════════════════════ */
 
 const addBatch = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'drugId');
-  const { qty, costPrice = 0, sellingPrice = 0, expiryDate, lotNo = null, supplierId = null } = req.body;
+  const {
+    qty,
+    costPrice,
+    sellingPrice,
+    expiryDate,
+    lotNo = null,
+    supplierId = null,
+  } = req.body;
 
   if (!Number.isFinite(qty) || qty <= 0) throw ApiError.badRequest('INVALID_QTY', 'qty must be > 0');
   if (!expiryDate) throw ApiError.badRequest('MISSING_EXPIRY', 'expiryDate required');
@@ -118,14 +209,38 @@ const addBatch = asyncHandler(async (req, res) => {
   const branchId = req.branchId || req.branchIds[0];
   if (!branchId) throw ApiError.badRequest('BRANCH_REQUIRED', 'A branch is required');
 
+  /* ─── inherit prices from last batch if omitted ─── */
+  let resolvedCost = costPrice;
+  let resolvedSell = sellingPrice;
+
+  if (
+    resolvedCost === undefined || resolvedCost === null || resolvedCost === '' ||
+    resolvedSell === undefined || resolvedSell === null || resolvedSell === ''
+  ) {
+    const last = await Batch.findOne({
+      __allowGlobal: true,
+      tenantId: req.tenantId,
+      drugId: drug._id,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (resolvedCost === undefined || resolvedCost === null || resolvedCost === '') {
+      resolvedCost = last?.costPrice ?? 0;
+    }
+    if (resolvedSell === undefined || resolvedSell === null || resolvedSell === '') {
+      resolvedSell = last?.sellingPrice ?? 0;
+    }
+  }
+
   const batch = await Batch.create({
     tenantId: req.tenantId,
     branchId,
     drugId: drug._id,
     lotNo,
     qty,
-    costPrice,
-    sellingPrice,
+    costPrice: Number(resolvedCost) || 0,
+    sellingPrice: Number(resolvedSell) || 0,
     expiryDate: new Date(expiryDate),
     supplierId,
     receivedAt: new Date(),
@@ -176,14 +291,23 @@ const updateBatch = asyncHandler(async (req, res) => {
 
 const removeBatch = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'batchId');
-  const batch = await Batch.findOne({ __allowGlobal: true, _id: req.params.id, tenantId: req.tenantId });
+  const batch = await Batch.findOne({
+    __allowGlobal: true,
+    _id: req.params.id,
+    tenantId: req.tenantId,
+  });
   if (!batch) throw ApiError.notFound('BATCH_NOT_FOUND', 'Batch not found');
-  if (batch.qty > 0) throw ApiError.badRequest('BATCH_IN_USE', 'Cannot delete a batch with stock remaining');
+  if (batch.qty > 0) {
+    throw ApiError.badRequest('BATCH_IN_USE', 'Cannot delete a batch with stock remaining');
+  }
+
   await batch.deleteOne();
-  return noContent(res);
+  return ok(res, { deleted: true, permanent: true });
 });
 
-/* ─────────────── STOCK ─────────────── */
+/* ═════════════════════════════════════════════════════════════════
+   STOCK
+   ═════════════════════════════════════════════════════════════════ */
 
 const adjust = asyncHandler(async (req, res) => {
   const { drugId, batchId = null, type, qty, note = null } = req.body;
@@ -229,7 +353,10 @@ const listMovements = asyncHandler(async (req, res) => {
 });
 
 const lowStock = asyncHandler(async (req, res) => {
-  const branchFilter = req.branchId ? { branchId: req.branchId } : {};
+  const tenantObjId = toObjectId(req.tenantId);
+  const branchObjId = req.branchId ? toObjectId(req.branchId) : null;
+  const branchFilter = branchObjId ? { branchId: branchObjId } : {};
+
   const drugs = await Drug.find({
     __allowGlobal: true,
     tenantId: req.tenantId,
@@ -239,7 +366,7 @@ const lowStock = asyncHandler(async (req, res) => {
   if (!drugs.length) return ok(res, []);
 
   const agg = await Batch.aggregate([
-    { $match: { tenantId: req.tenantId, ...branchFilter } },
+    { $match: { tenantId: tenantObjId, ...branchFilter } },
     { $group: { _id: '$drugId', qty: { $sum: '$qty' } } },
   ]);
   const qtyByDrug = Object.fromEntries(agg.map((r) => [String(r._id), r.qty]));

@@ -2,11 +2,16 @@ const crypto = require('crypto');
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { ok, created } = require('../../utils/apiResponse');
 const { ApiError } = require('../../utils/apiError');
-const { env } = require('../../config/env');
 const { hashPassword, comparePassword } = require('../../utils/password');
-const { signAccessToken, signRefreshToken, verifyRefreshToken, verifyAccessToken } = require('../../utils/jwt');
+const {
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+  verifyAccessToken,
+} = require('../../utils/jwt');
 const { slugify } = require('../../utils/slugify');
-const { runAsTenant } = require('../../models/plugins/context');
+const { generateInvoiceNumber } = require('../../utils/invoiceNumber');
+const { env } = require('../../config/env');
 
 const Tenant = require('../../models/admin/Tenant');
 const User = require('../../models/client/User');
@@ -15,10 +20,12 @@ const Plan = require('../../models/admin/Plan');
 const PendingActivation = require('../../models/admin/PendingActivation');
 const SuperAdmin = require('../../models/admin/SuperAdmin');
 const UserInvitation = require('../../models/client/UserInvitation');
-const settingsService = require('../../services/settingsService');
-const invoiceService = require('../../services/invoiceService');
+const Invoice = require('../../models/client/Invoice');
 const emailService = require('../../services/emailService');
 const smsService = require('../../services/smsService');
+const paymentInstructionsService = require('../../services/paymentInstructionsService');
+
+/* ─────────────── helpers ─────────────── */
 
 async function uniqueSlug(base) {
   let slug = slugify(base);
@@ -31,10 +38,6 @@ async function uniqueSlug(base) {
     exists = await Tenant.findOne({ slug }).lean();
   }
   return slug;
-}
-
-function randomPassword(len = 12) {
-  return crypto.randomBytes(len).toString('base64url').slice(0, len);
 }
 
 async function notifyAdminsOfPending({ tenant, owner }) {
@@ -56,6 +59,35 @@ async function notifyAdminsOfPending({ tenant, owner }) {
   }
 }
 
+function buildSessionPayload(user, tenant) {
+  const scope = tenant.status === 'active' ? 'active' : 'pending';
+  return {
+    sub: String(user._id),
+    tenantId: String(tenant._id),
+    role: user.role,
+    branchIds: (user.branchIds || []).map(String),
+    scope,
+  };
+}
+
+/**
+ * Shaped tenant object returned to the client.
+ * Includes settings so the receipt brand (logo, address, receipt text)
+ * is available without a second request.
+ */
+function shapeTenant(tenant) {
+  return {
+    id: tenant._id,
+    name: tenant.name,
+    slug: tenant.slug,
+    status: tenant.status,
+    planCode: tenant.planCode,
+    settings: tenant.settings || {},
+  };
+}
+
+/* ─────────────── REGISTER ─────────────── */
+
 const register = asyncHandler(async (req, res) => {
   const {
     businessName,
@@ -68,16 +100,19 @@ const register = asyncHandler(async (req, res) => {
   } = req.body;
 
   if (!businessName || !ownerName || !email || !password || !planCode) {
-    throw ApiError.badRequest('MISSING_FIELDS', 'businessName, ownerName, email, password, planCode required');
+    throw ApiError.badRequest(
+      'MISSING_FIELDS',
+      'businessName, ownerName, email, password, planCode required'
+    );
   }
-  if (password.length < 8) throw ApiError.badRequest('WEAK_PASSWORD', 'Password must be at least 8 characters');
+  if (password.length < 8) {
+    throw ApiError.badRequest('WEAK_PASSWORD', 'Password must be at least 8 characters');
+  }
 
-  const open = await settingsService.isRegistrationOpen();
-  if (!open) throw ApiError.forbidden('REGISTRATION_CLOSED', 'Registration is closed');
-
-  const existing = await runAsTenant({ allowGlobal: true }, () =>
-    User.findOne({ __allowGlobal: true, email: email.toLowerCase() }).lean()
-  );
+  const existing = await User.findOne({
+    __allowGlobal: true,
+    email: email.toLowerCase(),
+  }).lean();
   if (existing) throw ApiError.conflict('EMAIL_TAKEN', 'Email already registered');
 
   const plan = await Plan.findOne({ code: planCode, isActive: true, isPublic: true }).lean();
@@ -95,6 +130,7 @@ const register = asyncHandler(async (req, res) => {
     status: 'pending_user',
     planCode: plan.code,
     registeredAt: now,
+    settings: {},
   });
 
   const branch = await Branch.create({
@@ -127,16 +163,56 @@ const register = asyncHandler(async (req, res) => {
     slaDeadline: new Date(now.getTime() + 48 * 3600 * 1000),
   });
 
+  /* ─── Invoice (if paid plan) ─── */
   let invoice = null;
-  if (plan.price?.amount > 0) {
-    try {
-      const result = await invoiceService.generateSubscriptionInvoice({ tenantId: tenant._id, owner, tenant, plan });
-      invoice = result.invoice;
-    } catch (err) {
-      // logged inside invoiceService
-    }
+  const planAmount = plan.price?.amount || 0;
+
+  if (planAmount > 0) {
+    const invoiceNumber = generateInvoiceNumber('INV');
+    const dueDate = new Date(now.getTime() + 3 * 3600 * 1000);
+    const currency = plan.price.currency || 'KES';
+
+    const instructions = await paymentInstructionsService
+      .getPaymentInstructions({ amount: planAmount, currency, invoiceNumber })
+      .catch(() => []);
+
+    invoice = await Invoice.create({
+      tenantId: tenant._id,
+      invoiceNumber,
+      customerSnapshot: {
+        name: owner.fullName,
+        email: owner.email,
+        phone: owner.phone || null,
+        address: null,
+      },
+      items: [
+        {
+          productId: null,
+          name: `${plan.name} Plan`,
+          description: `${plan.price.interval} · ${tenant.name}`,
+          qty: 1,
+          unitPrice: planAmount,
+          subtotal: planAmount,
+        },
+      ],
+      subtotal: planAmount,
+      discount: 0,
+      tax: 0,
+      total: planAmount,
+      amountPaid: 0,
+      amountDue: planAmount,
+      currency,
+      status: 'sent',
+      dueDate,
+      issuedAt: now,
+      sentAt: now,
+      notes: 'Payment due within 3 hours.',
+      paymentInstructions: instructions,
+      createdBy: owner._id,
+    });
   }
 
+  /* ─── Emails ─── */
   if (owner.email) {
     emailService
       .sendRegistrationReceived({
@@ -145,7 +221,7 @@ const register = asyncHandler(async (req, res) => {
         name: owner.fullName,
         businessName: tenant.name,
         planName: plan.name,
-        amount: plan.price?.amount || 0,
+        amount: planAmount,
         currency: plan.price?.currency || 'KES',
         dueDate: invoice?.dueDate ? invoice.dueDate.toISOString() : null,
         invoiceNumber: invoice?.invoiceNumber || null,
@@ -168,8 +244,8 @@ const register = asyncHandler(async (req, res) => {
           total: invoice.total,
           amountDue: invoice.amountDue,
           currency: invoice.currency,
-          dueDate: invoice.dueDate ? invoice.dueDate.toISOString() : null,
-          issuedAt: invoice.issuedAt ? invoice.issuedAt.toISOString() : null,
+          dueDate: invoice.dueDate.toISOString(),
+          issuedAt: invoice.issuedAt.toISOString(),
           notes: invoice.notes,
           instructions: invoice.paymentInstructions,
           payUrl: `${env.appUrl}/invoice/${invoice.invoiceNumber}`,
@@ -180,42 +256,59 @@ const register = asyncHandler(async (req, res) => {
 
   notifyAdminsOfPending({ tenant, owner }).catch(() => {});
 
-  const payload = {
-    sub: String(owner._id),
-    tenantId: String(tenant._id),
-    role: owner.role,
-    branchIds: owner.branchIds.map(String),
-    scope: 'pending',
-  };
+  const payload = buildSessionPayload(owner, tenant);
 
   return created(res, {
-    user: { id: owner._id, fullName: owner.fullName, email: owner.email, role: owner.role, status: owner.status },
-    tenant: { id: tenant._id, name: tenant.name, slug: tenant.slug, status: tenant.status, planCode: tenant.planCode },
-    plan: { code: plan.code, name: plan.name, limits: plan.limits, features: plan.features },
+    user: {
+      id: owner._id,
+      fullName: owner.fullName,
+      email: owner.email,
+      phone: owner.phone,
+      role: owner.role,
+      status: owner.status,
+      branchIds: owner.branchIds,
+    },
+    tenant: shapeTenant(tenant),
+    plan: {
+      code: plan.code,
+      name: plan.name,
+      limits: plan.limits,
+      features: plan.features,
+    },
     invoice: invoice
       ? {
           invoiceNumber: invoice.invoiceNumber,
+          items: invoice.items,
+          subtotal: invoice.subtotal,
+          discount: invoice.discount,
+          tax: invoice.tax,
           total: invoice.total,
+          amountPaid: invoice.amountPaid,
           amountDue: invoice.amountDue,
           currency: invoice.currency,
-          dueDate: invoice.dueDate,
-          issuedAt: invoice.issuedAt,
           status: invoice.status,
+          issuedAt: invoice.issuedAt,
+          dueDate: invoice.dueDate,
+          notes: invoice.notes,
           paymentInstructions: invoice.paymentInstructions || [],
         }
       : null,
     accessToken: signAccessToken(payload, 'tenant'),
     refreshToken: signRefreshToken(payload, 'tenant').token,
+    scope: 'pending',
   });
 });
 
+/* ─────────────── LOGIN ─────────────── */
+
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) throw ApiError.badRequest('MISSING_FIELDS', 'Email and password required');
+  if (!email || !password) {
+    throw ApiError.badRequest('MISSING_FIELDS', 'Email and password required');
+  }
 
-  const user = await runAsTenant({ allowGlobal: true }, () =>
-    User.findOne({ __allowGlobal: true, email: email.toLowerCase() }).select('+passwordHash')
-  );
+  const user = await User.findOne({ __allowGlobal: true, email: email.toLowerCase() })
+    .select('+passwordHash');
   if (!user) throw ApiError.unauthorized('INVALID_CREDENTIALS', 'Invalid email or password');
 
   if (['rejected', 'suspended'].includes(user.status)) {
@@ -232,14 +325,8 @@ const login = asyncHandler(async (req, res) => {
     throw ApiError.forbidden('TENANT_BLOCKED', `Tenant ${tenant.status}`);
   }
 
-  const scope = tenant.status === 'active' ? 'active' : 'pending';
-  const payload = {
-    sub: String(user._id),
-    tenantId: String(tenant._id),
-    role: user.role,
-    branchIds: (user.branchIds || []).map(String),
-    scope,
-  };
+  const payload = buildSessionPayload(user, tenant);
+  const scope = payload.scope;
 
   user.lastLoginAt = new Date();
   await user.save();
@@ -256,56 +343,68 @@ const login = asyncHandler(async (req, res) => {
       phone: user.phone,
       role: user.role,
       status: user.status,
+      branchIds: user.branchIds,
       mustChangePassword: user.mustChangePassword,
     },
-    tenant: { id: tenant._id, name: tenant.name, status: tenant.status, planCode: tenant.planCode },
-    plan: plan ? { code: plan.code, name: plan.name, limits: plan.limits, features: plan.features } : null,
+    tenant: shapeTenant(tenant),
+    plan: plan
+      ? { code: plan.code, name: plan.name, limits: plan.limits, features: plan.features }
+      : null,
     scope,
   });
 });
+
+/* ─────────────── REFRESH ─────────────── */
 
 const refresh = asyncHandler(async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) throw ApiError.badRequest('NO_REFRESH', 'Refresh token required');
 
-  let payload;
+  let decoded;
   try {
-    payload = verifyRefreshToken(refreshToken, 'tenant');
+    decoded = verifyRefreshToken(refreshToken, 'tenant');
   } catch {
     throw ApiError.unauthorized('INVALID_REFRESH', 'Invalid or expired refresh token');
   }
 
-  const user = await runAsTenant({ allowGlobal: true }, () =>
-    User.findOne({ __allowGlobal: true, _id: payload.sub })
-  );
+  const user = await User.findOne({ __allowGlobal: true, _id: decoded.sub });
   if (!user) throw ApiError.unauthorized('USER_NOT_FOUND', 'User not found');
-  if (!['active', 'pending'].includes(user.status)) throw ApiError.forbidden('USER_BLOCKED', 'Account is not active');
+  if (!['active', 'pending'].includes(user.status)) {
+    throw ApiError.forbidden('USER_BLOCKED', 'Account is not active');
+  }
 
   const tenant = await Tenant.findById(user.tenantId).lean();
   if (!tenant) throw ApiError.notFound('TENANT_NOT_FOUND', 'Tenant not found');
 
-  const scope = tenant.status === 'active' ? 'active' : 'pending';
-  const next = {
-    sub: String(user._id),
-    tenantId: String(tenant._id),
-    role: user.role,
-    branchIds: (user.branchIds || []).map(String),
-    scope,
-  };
+  const payload = buildSessionPayload(user, tenant);
 
   return ok(res, {
-    accessToken: signAccessToken(next, 'tenant'),
-    refreshToken: signRefreshToken(next, 'tenant').token,
+    accessToken: signAccessToken(payload, 'tenant'),
+    refreshToken: signRefreshToken(payload, 'tenant').token,
+    scope: payload.scope,
   });
 });
 
-const logout = asyncHandler(async (req, res) => {
+/* ─────────────── LOGOUT ─────────────── */
+
+const logout = asyncHandler(async (_req, res) => {
   return ok(res, { loggedOut: true });
 });
 
+/* ─────────────── ME ─────────────── */
+
 const me = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id).lean();
+  const user = await User.findOne({
+    __allowGlobal: true,
+    _id: req.user._id,
+    tenantId: req.tenantId,
+  }).lean();
+
+  if (!user) throw ApiError.notFound('USER_NOT_FOUND', 'User not found');
+
   const tenant = await Tenant.findById(req.tenantId).lean();
+  if (!tenant) throw ApiError.notFound('TENANT_NOT_FOUND', 'Tenant not found');
+
   const plan = await Plan.findOne({ code: tenant.planCode }).lean();
 
   return ok(res, {
@@ -317,20 +416,23 @@ const me = asyncHandler(async (req, res) => {
       role: user.role,
       status: user.status,
       branchIds: user.branchIds,
+      mustChangePassword: user.mustChangePassword,
     },
-    tenant: { id: tenant._id, name: tenant.name, slug: tenant.slug, status: tenant.status, planCode: tenant.planCode },
-    plan: plan ? { code: plan.code, name: plan.name, limits: plan.limits, features: plan.features } : null,
-    scope: req.scope,
+    tenant: shapeTenant(tenant),
+    plan: plan
+      ? { code: plan.code, name: plan.name, limits: plan.limits, features: plan.features }
+      : null,
+    scope: tenant.status === 'active' ? 'active' : 'pending',
   });
 });
+
+/* ─────────────── FORGOT PASSWORD ─────────────── */
 
 const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
   if (!email) throw ApiError.badRequest('EMAIL_REQUIRED', 'Email required');
 
-  const user = await runAsTenant({ allowGlobal: true }, () =>
-    User.findOne({ __allowGlobal: true, email: email.toLowerCase() })
-  );
+  const user = await User.findOne({ __allowGlobal: true, email: email.toLowerCase() });
   if (!user) return ok(res, { sent: true });
 
   const token = crypto.randomBytes(32).toString('hex');
@@ -351,14 +453,18 @@ const forgotPassword = asyncHandler(async (req, res) => {
   return ok(res, { sent: true });
 });
 
+/* ─────────────── RESET PASSWORD ─────────────── */
+
 const resetPassword = asyncHandler(async (req, res) => {
   const { token, newPassword } = req.body;
-  if (!token || !newPassword) throw ApiError.badRequest('MISSING_FIELDS', 'token and newPassword required');
-  if (newPassword.length < 8) throw ApiError.badRequest('WEAK_PASSWORD', 'Password must be at least 8 characters');
+  if (!token || !newPassword) {
+    throw ApiError.badRequest('MISSING_FIELDS', 'token and newPassword required');
+  }
+  if (newPassword.length < 8) {
+    throw ApiError.badRequest('WEAK_PASSWORD', 'Password must be at least 8 characters');
+  }
 
-  const user = await runAsTenant({ allowGlobal: true }, () =>
-    User.findOne({ __allowGlobal: true, resetToken: token }).select('+resetToken')
-  );
+  const user = await User.findOne({ __allowGlobal: true, resetToken: token }).select('+resetToken');
   if (!user) throw ApiError.badRequest('INVALID_TOKEN', 'Invalid or expired token');
   if (user.resetExpiresAt && user.resetExpiresAt < new Date()) {
     throw ApiError.badRequest('TOKEN_EXPIRED', 'Reset token expired');
@@ -382,20 +488,70 @@ const resetPassword = asyncHandler(async (req, res) => {
   return ok(res, { reset: true });
 });
 
+/* ─────────────── CHANGE PASSWORD (self) ─────────────── */
+
+const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    throw ApiError.badRequest(
+      'MISSING_FIELDS',
+      'currentPassword and newPassword required'
+    );
+  }
+  if (newPassword.length < 8) {
+    throw ApiError.badRequest('WEAK_PASSWORD', 'New password must be at least 8 characters');
+  }
+  if (currentPassword === newPassword) {
+    throw ApiError.badRequest('SAME_PASSWORD', 'New password must be different');
+  }
+
+  const user = await User.findOne({
+    __allowGlobal: true,
+    _id: req.user._id,
+    tenantId: req.tenantId,
+  }).select('+passwordHash');
+
+  if (!user) throw ApiError.notFound('USER_NOT_FOUND', 'User not found');
+
+  const valid = await comparePassword(currentPassword, user.passwordHash);
+  if (!valid) {
+    throw ApiError.badRequest('INVALID_PASSWORD', 'Current password is incorrect');
+  }
+
+  user.passwordHash = await hashPassword(newPassword);
+  user.mustChangePassword = false;
+  await user.save();
+
+  emailService
+    .sendPasswordChanged({
+      tenantId: req.tenantId,
+      to: user.email,
+      fullName: user.fullName,
+      when: new Date().toISOString(),
+      ip: req.ip,
+    })
+    .catch(() => {});
+
+  return ok(res, { changed: true });
+});
+
+/* ─────────────── ACCEPT INVITE ─────────────── */
+
 const acceptInvite = asyncHandler(async (req, res) => {
   const { token, password, fullName } = req.body;
-  if (!token || !password) throw ApiError.badRequest('MISSING_FIELDS', 'token and password required');
-  if (password.length < 8) throw ApiError.badRequest('WEAK_PASSWORD', 'Password must be at least 8 characters');
+  if (!token || !password) {
+    throw ApiError.badRequest('MISSING_FIELDS', 'token and password required');
+  }
+  if (password.length < 8) {
+    throw ApiError.badRequest('WEAK_PASSWORD', 'Password must be at least 8 characters');
+  }
 
-  const inv = await runAsTenant({ allowGlobal: true }, () =>
-    UserInvitation.findOne({ __allowGlobal: true, token, acceptedAt: null })
-  );
+  const inv = await UserInvitation.findOne({ __allowGlobal: true, token, acceptedAt: null });
   if (!inv) throw ApiError.badRequest('INVALID_INVITE', 'Invalid or expired invitation');
   if (inv.expiresAt < new Date()) throw ApiError.badRequest('INVITE_EXPIRED', 'Invitation expired');
 
-  const user = await runAsTenant({ allowGlobal: true }, () =>
-    User.findOne({ __allowGlobal: true, _id: inv.userId })
-  );
+  const user = await User.findOne({ __allowGlobal: true, _id: inv.userId });
   if (!user) throw ApiError.notFound('USER_NOT_FOUND', 'User not found');
 
   user.passwordHash = await hashPassword(password);
@@ -408,61 +564,58 @@ const acceptInvite = asyncHandler(async (req, res) => {
   await inv.save();
 
   const tenant = await Tenant.findById(user.tenantId).lean();
-  const scope = tenant?.status === 'active' ? 'active' : 'pending';
+  const payload = buildSessionPayload(user, tenant);
+
+  return ok(res, {
+    accessToken: signAccessToken(payload, 'tenant'),
+    refreshToken: signRefreshToken(payload, 'tenant').token,
+    user: { id: user._id, email: user.email, role: user.role },
+    tenant: shapeTenant(tenant),
+    scope: payload.scope,
+  });
+});
+
+/* ─────────────── IMPERSONATE EXCHANGE ─────────────── */
+
+const impersonateExchange = asyncHandler(async (req, res) => {
+  const { impToken } = req.body;
+  if (!impToken) throw ApiError.badRequest('MISSING_FIELDS', 'impToken required');
+
+  let decoded;
+  try {
+    decoded = verifyAccessToken(impToken, 'tenant');
+  } catch {
+    throw ApiError.unauthorized('INVALID_TOKEN', 'Invalid impersonation token');
+  }
+
+  if (!decoded.impersonatedBy) {
+    throw ApiError.forbidden('NOT_IMPERSONATION', 'Not an impersonation token');
+  }
+
+  const user = await User.findOne({ __allowGlobal: true, _id: decoded.sub }).lean();
+  if (!user) throw ApiError.notFound('USER_NOT_FOUND', 'User not found');
+
+  const tenant = await Tenant.findById(user.tenantId).lean();
+  if (!tenant) throw ApiError.notFound('TENANT_NOT_FOUND', 'Tenant not found');
+
   const payload = {
-    sub: String(user._id),
-    tenantId: String(user.tenantId),
-    role: user.role,
-    branchIds: (user.branchIds || []).map(String),
-    scope,
+    ...buildSessionPayload(user, tenant),
+    impersonatedBy: decoded.impersonatedBy,
   };
 
   return ok(res, {
     accessToken: signAccessToken(payload, 'tenant'),
     refreshToken: signRefreshToken(payload, 'tenant').token,
     user: { id: user._id, email: user.email, role: user.role },
+    tenant: shapeTenant(tenant),
+    scope: payload.scope,
+    impersonatedBy: decoded.impersonatedBy,
   });
 });
 
-const impersonateExchange = asyncHandler(async (req, res) => {
-  const { impToken } = req.body;
-  if (!impToken) throw ApiError.badRequest('MISSING_FIELDS', 'impToken required');
+/* ─────────────── EXPORTS ─────────────── */
 
-  let payload;
-  try {
-    payload = verifyAccessToken(impToken, 'tenant');
-  } catch {
-    throw ApiError.unauthorized('INVALID_TOKEN', 'Invalid impersonation token');
-  }
-
-  if (!payload.impersonatedBy) throw ApiError.forbidden('NOT_IMPERSONATION', 'Not an impersonation token');
-
-  const user = await runAsTenant({ allowGlobal: true }, () =>
-    User.findOne({ __allowGlobal: true, _id: payload.sub })
-  );
-  if (!user) throw ApiError.notFound('USER_NOT_FOUND', 'User not found');
-
-  const tenant = await Tenant.findById(user.tenantId).lean();
-  const scope = tenant?.status === 'active' ? 'active' : 'pending';
-
-  const next = {
-    sub: String(user._id),
-    tenantId: String(user.tenantId),
-    role: user.role,
-    branchIds: (user.branchIds || []).map(String),
-    scope,
-    impersonatedBy: payload.impersonatedBy,
-  };
-
-  return ok(res, {
-    accessToken: signAccessToken(next, 'tenant'),
-    refreshToken: signRefreshToken(next, 'tenant').token,
-    user: { id: user._id, email: user.email, role: user.role },
-    impersonatedBy: payload.impersonatedBy,
-  });
-});
-
-module.exports = {
+const exported = {
   register,
   login,
   refresh,
@@ -470,6 +623,15 @@ module.exports = {
   me,
   forgotPassword,
   resetPassword,
+  changePassword,
   acceptInvite,
   impersonateExchange,
 };
+
+for (const [name, fn] of Object.entries(exported)) {
+  if (typeof fn !== 'function') {
+    throw new Error(`authController: export "${name}" is not a function`);
+  }
+}
+
+module.exports = exported;

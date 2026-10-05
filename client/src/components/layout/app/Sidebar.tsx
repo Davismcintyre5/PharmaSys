@@ -1,7 +1,19 @@
 import { NavLink } from 'react-router-dom';
 import {
-  Boxes, Bot, Building2, CircleDollarSign, CreditCard, FileText, LayoutDashboard,
-  Package, Pill, Receipt, Settings, ShoppingCart, Stethoscope, Truck, Users,
+  Boxes,
+  Bot,
+  Building2,
+  CircleDollarSign,
+  CreditCard,
+  FileText,
+  LayoutDashboard,
+  Pill,
+  Receipt,
+  Settings,
+  ShoppingCart,
+  Stethoscope,
+  Truck,
+  Users,
 } from 'lucide-react';
 import { Logo } from '@/components/ui/Logo';
 import { useAuth } from '@/context/AuthProvider';
@@ -9,7 +21,7 @@ import { useSite } from '@/context/SiteProvider';
 import { hasPermission } from '@/utils/permissions';
 import { cn } from '@/components/ui/_cn';
 
-interface Item {
+export interface Item {
   to: string;
   label: string;
   icon: React.ReactNode;
@@ -17,7 +29,7 @@ interface Item {
   ownerOnly?: boolean;
 }
 
-const ITEMS: Item[] = [
+export const NAV_ITEMS: Item[] = [
   { to: '/app/dashboard', label: 'Dashboard', icon: <LayoutDashboard size={16} /> },
   { to: '/app/pos', label: 'Point of Sale', icon: <ShoppingCart size={16} />, permission: 'sales.create' },
   { to: '/app/sales', label: 'Sales', icon: <Receipt size={16} /> },
@@ -32,7 +44,8 @@ const ITEMS: Item[] = [
   { to: '/app/users', label: 'Staff', icon: <Users size={16} />, permission: 'users.view' },
   { to: '/app/ai', label: 'AI', icon: <Bot size={16} />, permission: 'ai.use' },
   { to: '/app/billing', label: 'Billing', icon: <CreditCard size={16} />, ownerOnly: true },
-  { to: '/app/settings', label: 'Settings', icon: <Settings size={16} />, permission: 'settings.edit' },
+  // ↓ Settings visible to everyone — the page decides what tabs to show
+  { to: '/app/settings', label: 'Settings', icon: <Settings size={16} /> },
 ];
 
 export function Sidebar() {
@@ -40,20 +53,21 @@ export function Sidebar() {
   const { brand } = useSite();
   const role = user?.role;
 
-  const visible = ITEMS.filter((item) => {
+  const visible = NAV_ITEMS.filter((item) => {
     if (item.ownerOnly && role !== 'owner') return false;
     if (item.permission && !hasPermission(role, item.permission)) return false;
     return true;
   });
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex">
-      <div className="flex h-16 items-center gap-2.5 border-b border-border px-4">
+    <aside className="hidden h-full w-60 shrink-0 flex-col border-r border-border bg-surface lg:flex">
+      <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-border px-4">
         <Logo size={28} />
         <span className="truncate text-sm font-semibold text-text">
           {brand?.name || 'PharmaSys'}
         </span>
       </div>
+
       <nav className="flex-1 overflow-y-auto p-2">
         {visible.map((item) => (
           <NavLink
@@ -73,6 +87,7 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
+
       <div className="border-t border-border p-3 text-xs text-text-subtle">
         v1.0.0
       </div>

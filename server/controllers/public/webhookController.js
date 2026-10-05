@@ -1,54 +1,247 @@
 const { asyncHandler } = require('../../utils/asyncHandler');
 const { logger } = require('../../utils/logger');
+const { env } = require('../../config/env');
+const { addMonths, addYears } = require('date-fns');
+
+const mpesaService = require('../../services/mpesaService');
+const emailService = require('../../services/emailService');
+const smsService = require('../../services/smsService');
 const Payment = require('../../models/client/Payment');
 const Invoice = require('../../models/client/Invoice');
 const Tenant = require('../../models/admin/Tenant');
 const User = require('../../models/client/User');
-const mpesaService = require('../../services/mpesaService');
-const stripeService = require('../../services/stripeService');
-const emailService = require('../../services/emailService');
-const smsService = require('../../services/smsService');
+const Plan = require('../../models/admin/Plan');
+const Subscription = require('../../models/admin/Subscription');
+const SuperAdmin = require('../../models/admin/SuperAdmin');
 
-async function notifyPaymentReceived(invoice, method, reference) {
-  const tenant = await Tenant.findById(invoice.tenantId).lean();
-  const owner = await User.findOne({ tenantId: invoice.tenantId, role: 'owner' }).lean();
-  if (!owner) return;
+function computePeriodEnd(cycle, from = new Date()) {
+  if (cycle === 'once') return null;
+  if (cycle === 'year') return addYears(from, 1);
+  return addMonths(from, 1);
+}
 
-  if (owner.email) {
-    emailService
-      .sendPaymentReceived({
-        tenantId: invoice.tenantId,
-        to: owner.email,
-        businessName: tenant?.name || 'PharmaSys',
-        customerName: owner.fullName,
-        invoiceNumber: invoice.invoiceNumber,
-        amount: invoice.amountPaid,
-        currency: invoice.currency,
-        paidAt: invoice.paidAt?.toISOString() || new Date().toISOString(),
-        paymentMethod: method,
-        paymentReference: reference || null,
-      })
-      .catch(() => {});
-  }
+/* ─────────────── NOTIFY OWNER ─────────────── */
 
-  if (owner.phone) {
-    smsService
-      .sendPaymentReceived({
-        tenantId: invoice.tenantId,
-        to: owner.phone,
-        invoiceNumber: invoice.invoiceNumber,
-        amount: invoice.amountPaid,
-        currency: invoice.currency,
-      })
-      .catch(() => {});
+async function notifyOwnerPaid(invoice, method, reference) {
+  try {
+    const tenant = await Tenant.findById(invoice.tenantId).lean();
+    const owner = await User.findOne({
+      __allowGlobal: true,
+      tenantId: invoice.tenantId,
+      role: 'owner',
+    })
+      .select('email phone fullName')
+      .lean();
+
+    if (!owner) return;
+    const plan = await Plan.findOne({ code: tenant?.planCode }).lean();
+
+    if (owner.email) {
+      emailService
+        .sendPaymentReceived({
+          tenantId: invoice.tenantId,
+          to: owner.email,
+          businessName: tenant?.name || 'PharmaSys',
+          customerName: owner.fullName,
+          invoiceNumber: invoice.invoiceNumber,
+          amount: invoice.amountPaid,
+          currency: invoice.currency,
+          paidAt: invoice.paidAt?.toISOString() || new Date().toISOString(),
+          paymentMethod: method,
+          paymentReference: reference || null,
+          notes: null,
+          planName: plan?.name || tenant?.planCode,
+          planLimits: plan?.limits,
+          planFeatures: plan?.features,
+          startDate: new Date().toLocaleDateString('en-KE', { dateStyle: 'medium' }),
+          endDate: tenant?.expiresAt
+            ? new Date(tenant.expiresAt).toLocaleDateString('en-KE', { dateStyle: 'medium' })
+            : null,
+          trialDays: plan?.trialDays || 0,
+          interval: plan?.price?.interval || 'month',
+        })
+        .catch(() => {});
+    }
+
+    if (owner.phone) {
+      smsService
+        .sendPaymentReceived({
+          tenantId: invoice.tenantId,
+          to: owner.phone,
+          invoiceNumber: invoice.invoiceNumber,
+          amount: invoice.amountPaid,
+          currency: invoice.currency,
+        })
+        .catch(() => {});
+    }
+  } catch (err) {
+    logger.error({ err: err.message, invoiceNumber: invoice.invoiceNumber }, 'notifyOwnerPaid failed');
   }
 }
+
+/* ─────────────── NOTIFY ADMINS ─────────────── */
+
+async function notifyAdminsPaid(invoice, method, reference) {
+  try {
+    const admins = await SuperAdmin.find({ status: 'active' }).select('email').lean();
+    if (!admins.length) return;
+
+    const tenant = await Tenant.findById(invoice.tenantId).select('name planCode registeredAt').lean();
+    const owner = await User.findOne({
+      __allowGlobal: true,
+      tenantId: invoice.tenantId,
+      role: 'owner',
+    }).select('fullName email phone').lean();
+
+    const daysSince = tenant?.registeredAt
+      ? Math.floor((Date.now() - new Date(tenant.registeredAt).getTime()) / 86_400_000)
+      : undefined;
+
+    const reviewUrl = `${env.adminUrl}/invoices`;
+
+    for (const admin of admins) {
+      emailService
+        .sendAdminPaymentReceived({
+          to: admin.email,
+          businessName: tenant?.name || '—',
+          ownerName: owner?.fullName || '—',
+          ownerEmail: owner?.email || '—',
+          ownerPhone: owner?.phone || null,
+          invoiceNumber: invoice.invoiceNumber,
+          amount: invoice.amountPaid,
+          currency: invoice.currency,
+          paidAt: invoice.paidAt?.toISOString() || new Date().toISOString(),
+          paymentMethod: method,
+          paymentReference: reference || null,
+          planName: null,
+          planCode: tenant?.planCode,
+          daysSinceRegistration: daysSince,
+          reviewUrl,
+        })
+        .catch(() => {});
+    }
+
+    logger.info(
+      { admins: admins.length, invoiceNumber: invoice.invoiceNumber },
+      'admin payment notifications sent'
+    );
+  } catch (err) {
+    logger.error({ err: err.message }, 'notifyAdminsPaid failed');
+  }
+}
+
+/* ─────────────── RENEWAL — AUTO EXTEND ─────────────── */
+
+async function autoExtendOnRenewal(invoice) {
+  try {
+    const tenant = await Tenant.findById(invoice.tenantId);
+    if (!tenant) return;
+
+    const plan = await Plan.findOne({ code: tenant.planCode }).lean();
+    const cycle = plan?.price?.interval || 'month';
+    const now = new Date();
+    const base = tenant.expiresAt && new Date(tenant.expiresAt) > now
+      ? new Date(tenant.expiresAt)
+      : now;
+
+    tenant.expiresAt = computePeriodEnd(cycle, base);
+    tenant.status = 'active';
+    await tenant.save();
+
+    const sub = await Subscription.findOne({ tenantId: tenant._id });
+    if (sub) {
+      sub.status = cycle === 'once' ? 'perpetual' : 'active';
+      sub.periodStart = now;
+      sub.periodEnd = tenant.expiresAt;
+      sub.lastRenewalAt = now;
+      sub.renewalCount = (sub.renewalCount || 0) + 1;
+      await sub.save();
+    }
+
+    const owner = await User.findOne({
+      __allowGlobal: true, tenantId: tenant._id, role: 'owner',
+    }).lean();
+
+    if (owner?.email) {
+      emailService
+        .sendRenewalApproved({
+          tenantId: tenant._id,
+          to: owner.email,
+          name: owner.fullName,
+          businessName: tenant.name,
+          planName: plan?.name || tenant.planCode,
+          amount: invoice.amountPaid,
+          currency: invoice.currency,
+          periodStart: now.toISOString(),
+          periodEnd: tenant.expiresAt?.toISOString(),
+          reference: invoice.paymentRef,
+          loginUrl: `${env.appUrl}/app/dashboard`,
+        })
+        .catch(() => {});
+    }
+
+    logger.info(
+      { tenantId: String(tenant._id), newExpiresAt: tenant.expiresAt },
+      'subscription renewed (auto-extend)'
+    );
+  } catch (err) {
+    logger.error({ err: err.message, invoiceNumber: invoice.invoiceNumber }, 'autoExtendOnRenewal failed');
+  }
+}
+
+/* ─────────────── UPGRADE — ADMIN ALERT ─────────────── */
+
+async function notifyAdminsOfUpgrade(invoice) {
+  try {
+    const admins = await SuperAdmin.find({ status: 'active' }).select('email').lean();
+    if (!admins.length) return;
+
+    const tenant = await Tenant.findById(invoice.tenantId).select('name planCode').lean();
+    const owner = await User.findOne({
+      __allowGlobal: true, tenantId: invoice.tenantId, role: 'owner',
+    }).select('fullName email phone').lean();
+    const targetPlan = await Plan.findOne({ code: invoice.planCode }).lean();
+    const currentPlan = await Plan.findOne({ code: tenant?.planCode }).lean();
+
+    for (const a of admins) {
+      emailService
+        .sendAdminUpgradeRequested({
+          to: a.email,
+          businessName: tenant?.name || '—',
+          ownerName: owner?.fullName || '—',
+          ownerEmail: owner?.email || '—',
+          ownerPhone: owner?.phone || null,
+          fromPlan: currentPlan?.name || tenant?.planCode || '—',
+          toPlan: targetPlan?.name || invoice.planCode || '—',
+          amount: invoice.amountPaid,
+          currency: invoice.currency,
+          invoiceNumber: invoice.invoiceNumber,
+          dueDate: invoice.paidAt?.toISOString(),
+          reviewUrl: `${env.adminUrl}/invoices/${invoice._id}`,
+        })
+        .catch(() => {});
+    }
+
+    logger.info(
+      { admins: admins.length, invoiceNumber: invoice.invoiceNumber },
+      'admin upgrade notifications sent'
+    );
+  } catch (err) {
+    logger.error({ err: err.message }, 'notifyAdminsOfUpgrade failed');
+  }
+}
+
+/* ─────────────── CALLBACK ─────────────── */
 
 const mpesaCallback = asyncHandler(async (req, res) => {
   const parsed = mpesaService.parseCallback(req.body);
 
   logger.info(
-    { checkoutRequestId: parsed.checkoutRequestId, success: parsed.success, receipt: parsed.mpesaReceiptNumber },
+    {
+      checkoutRequestId: parsed.checkoutRequestId,
+      success: parsed.success,
+      receipt: parsed.mpesaReceiptNumber,
+    },
     'mpesa callback parsed'
   );
 
@@ -56,10 +249,14 @@ const mpesaCallback = asyncHandler(async (req, res) => {
     return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
   }
 
-  const payment = await Payment.findOne({ providerRef: parsed.checkoutRequestId });
+  const payment = await Payment.findOne({
+    __allowGlobal: true,
+    providerRef: parsed.checkoutRequestId,
+  });
 
   if (payment) {
     if (payment.status === 'success' || payment.status === 'failed') {
+      logger.warn({ paymentId: String(payment._id) }, 'payment already final');
       return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
     }
 
@@ -76,7 +273,10 @@ const mpesaCallback = asyncHandler(async (req, res) => {
     await payment.save();
 
     if (parsed.success && payment.invoiceId) {
-      const invoice = await Invoice.findById(payment.invoiceId);
+      const invoice = await Invoice.findOne({
+        __allowGlobal: true,
+        _id: payment.invoiceId,
+      });
       if (invoice && invoice.status !== 'paid') {
         invoice.status = 'paid';
         invoice.amountPaid = invoice.total;
@@ -86,11 +286,22 @@ const mpesaCallback = asyncHandler(async (req, res) => {
         invoice.paymentRef = parsed.mpesaReceiptNumber || null;
         await invoice.save();
 
-        await notifyPaymentReceived(invoice, 'mpesa_stk', parsed.mpesaReceiptNumber);
+        await notifyOwnerPaid(invoice, 'mpesa_stk', parsed.mpesaReceiptNumber);
+        await notifyAdminsPaid(invoice, 'mpesa_stk', parsed.mpesaReceiptNumber);
+
+        if (invoice.purpose === 'renewal') {
+          await autoExtendOnRenewal(invoice);
+        } else if (invoice.purpose === 'upgrade') {
+          await notifyAdminsOfUpgrade(invoice);
+        }
       }
     }
   } else {
-    const invoice = await Invoice.findOne({ 'stkLastRequest.checkoutRequestId': parsed.checkoutRequestId });
+    const invoice = await Invoice.findOne({
+      __allowGlobal: true,
+      'stkLastRequest.checkoutRequestId': parsed.checkoutRequestId,
+    });
+
     if (invoice && parsed.success && invoice.status !== 'paid') {
       invoice.status = 'paid';
       invoice.amountPaid = invoice.total;
@@ -100,7 +311,16 @@ const mpesaCallback = asyncHandler(async (req, res) => {
       invoice.paymentRef = parsed.mpesaReceiptNumber || null;
       await invoice.save();
 
-      await notifyPaymentReceived(invoice, 'mpesa_stk', parsed.mpesaReceiptNumber);
+      await notifyOwnerPaid(invoice, 'mpesa_stk', parsed.mpesaReceiptNumber);
+      await notifyAdminsPaid(invoice, 'mpesa_stk', parsed.mpesaReceiptNumber);
+
+      if (invoice.purpose === 'renewal') {
+        await autoExtendOnRenewal(invoice);
+      } else if (invoice.purpose === 'upgrade') {
+        await notifyAdminsOfUpgrade(invoice);
+      }
+    } else {
+      logger.warn({ checkoutRequestId: parsed.checkoutRequestId }, 'no payment or invoice matched');
     }
   }
 
@@ -113,17 +333,7 @@ const mpesaTimeout = asyncHandler(async (req, res) => {
 });
 
 const stripeWebhook = asyncHandler(async (req, res) => {
-  const signature = req.headers['stripe-signature'];
-  let event;
-
-  try {
-    event = stripeService.verifyWebhook(req.body, signature);
-  } catch (err) {
-    logger.warn({ err: err.message }, 'stripe signature verification failed');
-    return res.status(400).json({ received: false });
-  }
-
-  await stripeService.handleEvent(event).catch(() => {});
+  logger.info('stripe webhook received');
   return res.status(200).json({ received: true });
 });
 

@@ -20,11 +20,12 @@ const requestId = require('./middleware/global/requestId');
 const requestLogger = require('./middleware/global/requestLogger');
 const notFound = require('./middleware/global/notFound');
 const errorHandler = require('./middleware/global/errorHandler');
+const corsMw = require('./middleware/global/cors');
 
 const routes = require('./routes');
 const { startSchedulers, stopSchedulers } = require('./schedulers');
 
-/* ─────────────── crash throttle ─────────────── */
+/* ─────────── crash throttle ─────────── */
 
 const CRASH_WINDOW_MS = 60_000;
 const CRASH_LIMIT = 5;
@@ -37,7 +38,7 @@ function recordCrash() {
   return crashTimes.length;
 }
 
-/* ─────────────── main ─────────────── */
+/* ─────────── main ─────────── */
 
 async function bootstrap() {
   logger.info(`PharmaSys API v${pkg.version} starting — env=${env.nodeEnv} port=${env.port}`);
@@ -45,7 +46,7 @@ async function bootstrap() {
   try {
     await connectDB();
   } catch (e) {
-    logger.error({ err: e.message }, 'boot failed: mongodb');
+    logger.error({ err: e.message }, 'boot failed: mongodb — retrying in 5s');
     setTimeout(bootstrap, 5000);
     return;
   }
@@ -69,24 +70,17 @@ async function bootstrap() {
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
 
-  const corsOptions = {
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      if (env.corsOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked: ${origin}`));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
-    exposedHeaders: ['X-Request-Id'],
-    maxAge: 86400,
-    optionsSuccessStatus: 204,
-  };
-  app.use(cors(corsOptions));
-  app.options(/.*/, cors(corsOptions));
+  /* ─── CORS — single source of truth in middleware/global/cors.js ─── */
+  app.use(corsMw);
+  app.options(/.*/, corsMw);
 
+  /* ─── body parsers ─── */
+  // Webhook-specific (must run BEFORE the global json parser)
   app.use('/api/live/webhooks/stripe', express.raw({ type: 'application/json' }));
+  app.use('/api/live/webhooks/mpesa', express.json({ limit: '1mb' }));
+  app.use('/api/live/webhooks/mpesa/timeout', express.json({ limit: '1mb' }));
 
+  // Global parsers
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -98,9 +92,16 @@ async function bootstrap() {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => req.ip,
-    message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+    message: {
+      success: false,
+      error: { code: 'RATE_LIMITED', message: 'Too many requests' },
+    },
   }));
 
+  /* ─── static brand assets ─── */
+  app.use('/brand', express.static('public/brand'));
+
+  /* ─── informational routes ─── */
   app.get('/', (_req, res) => {
     res.json({
       ok: true,
@@ -113,10 +114,28 @@ async function bootstrap() {
     });
   });
 
+  app.get('/api', (_req, res) => {
+    res.json({
+      ok: true,
+      service: 'pharmasys-api',
+      version: pkg.version,
+      message: 'PharmaSys API — /api',
+      endpoints: {
+        health: '/health',
+        public: '/api/public',
+        auth: '/api/auth',
+        app: '/api/app',
+        admin: '/api/admin',
+        live: '/api/live',
+      },
+    });
+  });
+
   app.get('/health', (_req, res) => {
     const dbUp = mongoose.connection.readyState === 1;
     const redis = getRedis();
     const redisUp = redis ? redis.status === 'ready' : false;
+
     res.json({
       ok: true,
       status: dbUp ? 'healthy' : 'degraded',
@@ -124,15 +143,22 @@ async function bootstrap() {
       version: pkg.version,
       env: env.nodeEnv,
       uptime: Math.floor(process.uptime()),
-      deps: { mongodb: dbUp ? 'up' : 'down', redis: redisUp ? 'up' : 'down' },
+      timestamp: new Date().toISOString(),
+      deps: {
+        mongodb: dbUp ? 'up' : 'down',
+        redis: redisUp ? 'up' : 'down',
+      },
     });
   });
 
+  /* ─── API routes ─── */
   app.use('/api', routes);
 
+  /* ─── terminal middleware ─── */
   app.use(notFound);
   app.use(errorHandler);
 
+  /* ─── HTTP + Socket.IO ─── */
   const server = http.createServer(app);
 
   const io = new Server(server, {
@@ -167,10 +193,10 @@ async function bootstrap() {
   global.__io = io;
 
   server.listen(env.port, () => {
-    logger.info(`listening on http://localhost:${env.port}`);
-    logger.info(`health  http://localhost:${env.port}/health`);
-    logger.info(`api     http://localhost:${env.port}/api`);
-    logger.info(`socket  http://localhost:${env.port}/api/live/ws`);
+    logger.info(`listening on ${env.apiUrl}`);
+    logger.info(`health  ${env.apiUrl}/health`);
+    logger.info(`api     ${env.apiUrl}/api`);
+    logger.info(`socket  ${env.apiUrl}/api/live/ws`);
   });
 
   try {
@@ -179,6 +205,7 @@ async function bootstrap() {
     logger.error({ err: e.message }, 'schedulers failed to start — server continues');
   }
 
+  /* ─── shutdown ─── */
   const shutdown = async (signal) => {
     logger.warn(`shutdown: ${signal}`);
     server.close(async () => {
@@ -199,8 +226,7 @@ async function bootstrap() {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
-
-  /* ─────────────── non-fatal error handling ─────────────── */
+  process.once('SIGUSR2', () => shutdown('SIGUSR2'));
 
   process.on('unhandledRejection', (reason) => {
     logger.error({ reason: String(reason) }, 'unhandledRejection — continuing');
@@ -218,11 +244,6 @@ async function bootstrap() {
       logger.fatal(`crash throttle hit (${count}/${CRASH_LIMIT} in ${CRASH_WINDOW_MS / 1000}s) — exiting`);
       process.exit(1);
     }
-  });
-
-  // SIGUSR2 — nodemon restart signal
-  process.once('SIGUSR2', () => {
-    shutdown('SIGUSR2');
   });
 }
 

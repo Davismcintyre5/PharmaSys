@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "PharmaSys",
+    "slug": "pharmasys",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "pharmasys",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pharmasys.mobile",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.pharmasys.mobile",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F172A"
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "pharmasys" },
+            { "scheme": "https", "host": "pharmasys.hdm.co.ke" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single",
+      "name": "PharmaSys"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-image-picker",
+      "expo-location",
+      "expo-notifications",
+      "expo-local-authentication"
+    ],
+    "extra": {
+      "apiUrl": "https://pharmasysapi.hdm.co.ke/api",
+      "socketUrl": "https://pharmasysapi.hdm.co.ke",
+      "appName": "PharmaSys",
+      "appEnv": "production"
+    }
+  }
+}

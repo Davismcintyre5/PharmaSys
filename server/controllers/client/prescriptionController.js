@@ -1,14 +1,23 @@
 const { asyncHandler } = require('../../utils/asyncHandler');
-const { ok, created, paginated } = require('../../utils/apiResponse');
+const { ok, created, paginated, noContent } = require('../../utils/apiResponse');
 const { parsePagination } = require('../../utils/pagination');
 const { assertObjectId } = require('../../utils/validateObjectId');
 const { ApiError } = require('../../utils/apiError');
+const { env } = require('../../config/env');
 
 const Prescription = require('../../models/client/Prescription');
 const Patient = require('../../models/client/Patient');
-const Doctor = require('../../models/client/Doctor');
+const Branch = require('../../models/client/Branch');
+const Tenant = require('../../models/admin/Tenant');
+const Doctor = require('../../models/client/Doctor');          // ← registers 'Doctor'
 const { Batch, StockMovement } = require('../../models/client/Inventory');
 const notificationService = require('../../services/notificationService');
+const emailService = require('../../services/emailService');
+const smsService = require('../../services/smsService');
+
+/* ═════════════════════════════════════════════════════════════════
+   LIST
+   ═════════════════════════════════════════════════════════════════ */
 
 const list = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -20,6 +29,7 @@ const list = asyncHandler(async (req, res) => {
   const [items, total] = await Promise.all([
     Prescription.find({ __allowGlobal: true, ...filter })
       .populate('patientId', 'name phone')
+      .populate('doctorId', 'name clinic')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -29,6 +39,10 @@ const list = asyncHandler(async (req, res) => {
 
   return paginated(res, items, page, limit, total);
 });
+
+/* ═════════════════════════════════════════════════════════════════
+   GET
+   ═════════════════════════════════════════════════════════════════ */
 
 const get = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'prescriptionId');
@@ -44,8 +58,19 @@ const get = asyncHandler(async (req, res) => {
   return ok(res, rx);
 });
 
+/* ═════════════════════════════════════════════════════════════════
+   CREATE
+   ═════════════════════════════════════════════════════════════════ */
+
 const create = asyncHandler(async (req, res) => {
-  const { patientId, doctorId = null, refNo = null, items, notes = null } = req.body;
+  const {
+    patientId,
+    doctorId = null,
+    refNo = null,
+    items,
+    notes = null,
+  } = req.body;
+
   if (!patientId || !Array.isArray(items) || !items.length) {
     throw ApiError.badRequest('MISSING_FIELDS', 'patientId and items required');
   }
@@ -74,6 +99,10 @@ const create = asyncHandler(async (req, res) => {
   return created(res, rx.toObject());
 });
 
+/* ═════════════════════════════════════════════════════════════════
+   UPDATE
+   ═════════════════════════════════════════════════════════════════ */
+
 const update = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'prescriptionId');
   const allowed = ['doctorId', 'refNo', 'items', 'notes', 'status'];
@@ -90,6 +119,10 @@ const update = asyncHandler(async (req, res) => {
   return ok(res, rx);
 });
 
+/* ═════════════════════════════════════════════════════════════════
+   DISPENSE
+   ═════════════════════════════════════════════════════════════════ */
+
 const dispense = asyncHandler(async (req, res) => {
   assertObjectId(req.params.id, 'prescriptionId');
   const rx = await Prescription.findOne({
@@ -98,7 +131,9 @@ const dispense = asyncHandler(async (req, res) => {
     tenantId: req.tenantId,
   });
   if (!rx) throw ApiError.notFound('PRESCRIPTION_NOT_FOUND', 'Prescription not found');
-  if (rx.status === 'dispensed') throw ApiError.badRequest('ALREADY_DISPENSED', 'Already dispensed');
+  if (rx.status === 'dispensed') {
+    throw ApiError.badRequest('ALREADY_DISPENSED', 'Already dispensed');
+  }
 
   const branchId = rx.branchId || req.branchId || req.branchIds[0];
 
@@ -118,7 +153,10 @@ const dispense = asyncHandler(async (req, res) => {
     for (const b of batches) {
       if (remaining <= 0) break;
       const take = Math.min(b.qty, remaining);
-      await Batch.updateOne({ __allowGlobal: true, _id: b._id }, { $inc: { qty: -take } });
+      await Batch.updateOne(
+        { __allowGlobal: true, _id: b._id },
+        { $inc: { qty: -take } }
+      );
       await StockMovement.create({
         tenantId: req.tenantId,
         branchId,
@@ -134,7 +172,10 @@ const dispense = asyncHandler(async (req, res) => {
     }
 
     if (remaining > 0) {
-      throw ApiError.badRequest('INSUFFICIENT_STOCK', `Not enough stock to dispense ${item.drugId}`);
+      throw ApiError.badRequest(
+        'INSUFFICIENT_STOCK',
+        `Not enough stock to dispense ${item.drugId}`
+      );
     }
   }
 
@@ -143,7 +184,12 @@ const dispense = asyncHandler(async (req, res) => {
   rx.dispensedAt = new Date();
   await rx.save();
 
-  const patient = await Patient.findOne({ __allowGlobal: true, _id: rx.patientId }).lean();
+  const patient = await Patient.findOne({
+    __allowGlobal: true,
+    _id: rx.patientId,
+  }).lean();
+  const tenant = await Tenant.findById(req.tenantId).select('name').lean();
+  const branch = await Branch.findById(branchId).select('name').lean();
 
   notificationService
     .notifyBranchManagers({
@@ -157,7 +203,105 @@ const dispense = asyncHandler(async (req, res) => {
     })
     .catch(() => {});
 
+  if (patient) {
+    const rxRef = rx.refNo || String(rx._id).slice(-6);
+    const pickupUrl = `${env.appUrl}/pending`;
+
+    if (patient.email) {
+      emailService
+        .sendPrescriptionReady({
+          tenantId: req.tenantId,
+          to: patient.email,
+          businessName: tenant?.name || 'PharmaSys',
+          patientName: patient.name,
+          prescriptionRef: rxRef,
+          branchName: branch?.name,
+          pickupUrl,
+        })
+        .catch(() => {});
+    }
+
+    if (patient.phone) {
+      smsService
+        .sendPrescriptionReady({
+          tenantId: req.tenantId,
+          to: patient.phone,
+          patientName: patient.name,
+          prescriptionRef: rxRef,
+          branchName: branch?.name,
+        })
+        .catch(() => {});
+    }
+  }
+
   return ok(res, rx.toObject());
 });
 
-module.exports = { list, get, create, update, dispense };
+/* ═════════════════════════════════════════════════════════════════
+   CANCEL
+   ═════════════════════════════════════════════════════════════════ */
+
+const cancel = asyncHandler(async (req, res) => {
+  assertObjectId(req.params.id, 'prescriptionId');
+  const { reason = null } = req.body;
+
+  const rx = await Prescription.findOne({
+    __allowGlobal: true,
+    _id: req.params.id,
+    tenantId: req.tenantId,
+  });
+  if (!rx) throw ApiError.notFound('PRESCRIPTION_NOT_FOUND', 'Prescription not found');
+  if (rx.status === 'dispensed') {
+    throw ApiError.badRequest('ALREADY_DISPENSED', 'Cannot cancel a dispensed prescription');
+  }
+  if (rx.status === 'cancelled') {
+    throw ApiError.badRequest('ALREADY_CANCELLED', 'Prescription is already cancelled');
+  }
+
+  rx.status = 'cancelled';
+  if (reason) rx.notes = `${rx.notes || ''}\nCancelled: ${reason}`.trim();
+  await rx.save();
+
+  return ok(res, rx.toObject());
+});
+
+/* ═════════════════════════════════════════════════════════════════
+   REMOVE (soft or hard)
+   ═════════════════════════════════════════════════════════════════ */
+
+const remove = asyncHandler(async (req, res) => {
+  assertObjectId(req.params.id, 'prescriptionId');
+  const hard = String(req.query.hard) === 'true';
+
+  if (hard && req.user.role !== 'owner') {
+    throw ApiError.forbidden(
+      'ONLY_OWNER',
+      'Only the owner can permanently delete prescriptions'
+    );
+  }
+
+  const rx = await Prescription.findOne({
+    __allowGlobal: true,
+    _id: req.params.id,
+    tenantId: req.tenantId,
+  });
+  if (!rx) throw ApiError.notFound('PRESCRIPTION_NOT_FOUND', 'Prescription not found');
+
+  if (hard) {
+    if (rx.status === 'dispensed') {
+      throw ApiError.badRequest(
+        'PRESCRIPTION_DISPENSED',
+        'Cannot permanently delete a dispensed prescription. Cancel or archive instead.'
+      );
+    }
+
+    await Prescription.deleteOne({ _id: rx._id });
+    return ok(res, { deleted: true, permanent: true });
+  }
+
+  rx.status = 'cancelled';
+  await rx.save();
+  return noContent(res);
+});
+
+module.exports = { list, get, create, update, dispense, cancel, remove };

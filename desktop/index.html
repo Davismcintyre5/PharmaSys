@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- Icons -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/brand/favicon-16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/brand/favicon-48.png" />
+    <link rel="icon" type="image/svg+xml" href="/brand/logo.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/brand/apple-touch-icon.png" />
+    <link rel="mask-icon" href="/brand/logo.svg" color="#0F172A" />
+
+    <!-- Theme -->
+    <meta name="theme-color" content="#0F172A" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)" />
+
+    <!-- SEO -->
+    <meta name="description" content="PharmaSys — Modern pharmacy management for Kenya and beyond." />
+    <meta name="application-name" content="PharmaSys" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="PharmaSys" />
+    <meta property="og:description" content="Modern pharmacy management for Kenya and beyond." />
+    <meta property="og:image" content="/brand/pwa-512x512.png" />
+    <meta property="og:site_name" content="PharmaSys" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="PharmaSys" />
+    <meta name="twitter:description" content="Modern pharmacy management for Kenya and beyond." />
+    <meta name="twitter:image" content="/brand/pwa-512x512.png" />
+
+    <title>PharmaSys</title>
+
+    <!-- Theme bootstrap (runs before React mounts to avoid flash) -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('theme');
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var dark = t === 'dark' || (t !== 'light' && prefersDark);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
