@@ -25,6 +25,7 @@ import AiForecastScreen from '@/screens/ai/AiForecast';
 import BranchesScreen from '@/screens/branches/Branches';
 import UsersScreen from '@/screens/users/Users';
 import BillingScreen from '@/screens/billing/Billing';
+import BillingPendingScreen from '@/screens/billing/BillingPending';
 import SettingsScreen from '@/screens/settings/Settings';
 
 import { useTheme } from '@/context/ThemeProvider';
@@ -108,6 +109,11 @@ export default function MoreNavigator() {
         options={{ title: 'Staff' }}
       />
       <Stack.Screen name="Billing" component={BillingScreen} />
+      <Stack.Screen
+        name="BillingPending"
+        component={BillingPendingScreen}
+        options={{ title: 'Pending Change' }}
+      />
       <Stack.Screen name="Settings" component={SettingsScreen} />
     </Stack.Navigator>
   );

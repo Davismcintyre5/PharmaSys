@@ -1,16 +1,21 @@
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { useTheme } from '@/context/ThemeProvider';
 
 interface DividerProps {
-  style?: any;
+  style?: StyleProp<ViewStyle>;
 }
 
 export function Divider({ style }: DividerProps) {
   const { theme } = useTheme();
+
   return (
     <View
-      style={[styles.divider, { backgroundColor: theme.colors.border }, style]}
+      style={[
+        styles.divider,
+        { backgroundColor: theme.colors.border },
+        style,
+      ]}
     />
   );
 }

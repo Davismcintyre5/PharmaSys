@@ -21,3 +21,4 @@ export { ThemeToggle } from './ThemeToggle';
 export { Logo } from './Logo';
 export { Skeleton } from './Skeleton';
 export { Sheet } from './Sheet';
+export { Switch } from './Switch';

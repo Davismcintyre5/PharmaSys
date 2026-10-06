@@ -1,12 +1,12 @@
 import React from 'react';
-import { View, Text, StyleSheet, ViewStyle } from 'react-native';
+import { View, Text, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { useTheme } from '@/context/ThemeProvider';
 
 interface CardProps {
   header?: string;
   footer?: React.ReactNode;
   plain?: boolean;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   children: React.ReactNode;
 }
 
@@ -25,25 +25,28 @@ export function Card({ header, footer, plain, style, children }: CardProps) {
         style,
       ]}
     >
-      {header && (
+      {header ? (
         <View
-          style={[styles.header, { borderBottomColor: theme.colors.border }]}
+          style={[
+            styles.header,
+            { borderBottomColor: theme.colors.border },
+          ]}
         >
           <Text style={[styles.headerText, { color: theme.colors.text }]}>
             {header}
           </Text>
         </View>
-      )}
+      ) : null}
 
       <View style={styles.body}>{children}</View>
 
-      {footer && (
+      {footer ? (
         <View
           style={[styles.footer, { borderTopColor: theme.colors.border }]}
         >
           {footer}
         </View>
-      )}
+      ) : null}
     </View>
   );
 }

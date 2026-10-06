@@ -20,12 +20,21 @@ import { navigationRef } from '@/navigation/navigationRef';
 import { useSessionRefresh } from '@/hooks/useSessionRefresh';
 import { useDeepLinks } from '@/hooks/useDeepLinks';
 
+import { checkForUpdate } from '@/utils/updateChecker';
+
 function AppInner() {
   const { theme, isDark } = useTheme();
   const { isLoading } = useAuth();
 
   useSessionRefresh();
   useDeepLinks();
+
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      checkForUpdate(false);
+    }, 3000);
+    return () => clearTimeout(t);
+  }, []);
 
   return (
     <NavigationContainer

@@ -17,8 +17,6 @@ const paymentInstructionsService = require('../../services/paymentInstructionsSe
 const { mpesaConfig } = require('../../config/mpesa');
 const { env } = require('../../config/env');
 
-/* ─────────────── helpers ─────────────── */
-
 function computePeriodEnd(cycle, from = new Date()) {
   if (cycle === 'once') return null;
   if (cycle === 'year') return addYears(from, 1);
@@ -44,9 +42,9 @@ function humanDate(d) {
 }
 
 /**
- * What invoice purposes are visible for this tenant?
- *   - active tenants  → only plan-change invoices (renewal, upgrade)
- *   - pending tenants → also their registration invoice (shown on /pending)
+ * Which invoice purposes are visible to this tenant?
+ *   - active tenants  → plan-change invoices only (renewal, upgrade)
+ *   - pending tenants → also their registration invoice
  */
 function visiblePurposes(tenantStatus) {
   return tenantStatus === 'active'
@@ -178,7 +176,6 @@ const renew = asyncHandler(async (req, res) => {
   const newPlan = await Plan.findOne({ code: planCode, isActive: true, isPublic: true }).lean();
   if (!newPlan) throw ApiError.badRequest('INVALID_PLAN', `Plan '${planCode}' not available`);
 
-  /* Guard: no open plan-change invoice */
   const openInvoice = await Invoice.findOne({
     __allowGlobal: true,
     tenantId: req.tenantId,
@@ -231,7 +228,6 @@ const renew = asyncHandler(async (req, res) => {
     lineItemDescription = `Prorated difference · ${tenant.name}`;
   }
 
-  /* ─── Free / zero-amount → activate immediately ─── */
   if (amount <= 0) {
     const plan = newPlan;
     const base = tenant.expiresAt && new Date(tenant.expiresAt) > now
@@ -278,7 +274,6 @@ const renew = asyncHandler(async (req, res) => {
     });
   }
 
-  /* ─── Create invoice for paid plans ─── */
   const invoiceNumber = generateInvoiceNumber(prefix);
   const dueDate = new Date(Date.now() + 3 * 3600 * 1000);
 
@@ -325,7 +320,6 @@ const renew = asyncHandler(async (req, res) => {
     createdBy: req.user._id,
   });
 
-  /* ─── Email: owner confirmation ─── */
   if (req.user.email) {
     if (purpose === 'upgrade') {
       emailService
@@ -361,7 +355,6 @@ const renew = asyncHandler(async (req, res) => {
     }
   }
 
-  /* ─── Email: admin alert ─── */
   try {
     const admins = await SuperAdmin.find({ status: 'active' }).select('email').lean();
     for (const a of admins) {
@@ -432,10 +425,12 @@ const stkPush = asyncHandler(async (req, res) => {
     throw ApiError.unavailable('MPESA_NOT_CONFIGURED', 'M-Pesa is not configured');
   }
 
+  const purposes = visiblePurposes(req.tenant?.status);
+
   const invoiceDoc = await Invoice.findOne({
     __allowGlobal: true,
     tenantId: req.tenantId,
-    purpose: { $in: ['renewal', 'upgrade'] },
+    purpose: { $in: purposes },
     approvedAt: null,
     status: { $in: ['sent', 'overdue'] },
   })

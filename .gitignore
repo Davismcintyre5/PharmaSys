@@ -16,6 +16,22 @@ out/
 .cache/
 .parcel-cache/
 
+# ─── Electron build output ───
+release/
+release/*.exe
+release/*.dmg
+release/*.AppImage
+release/*.yml
+release/*.blockmap
+release/builder-effective-config.yaml
+release/win-unpacked/
+release/linux-unpacked/
+release/mac/
+release/mac-arm64/
+assets/icon-*.png
+assets/icon.png
+assets/icon.ico
+
 # ─── Environment ───
 .env
 .env.local
@@ -67,7 +83,7 @@ jest-cache/
 *.tsbuildinfo
 .tscache/
 
-# ─── Package manager lock conflicts ───
+# ─── Lockfiles ───
 # Keep the one you actually use, ignore the others:
 package-lock.json
 yarn.lock
@@ -99,6 +115,17 @@ client/.vite/
 admin/public/brand/*.png
 !admin/public/brand/logo.png
 admin/.vite/
+
+# ─── Desktop (Electron) ───
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+desktop/assets/icon-*.png
+desktop/assets/icon.png
+desktop/assets/icon.ico
+desktop/.vite/
+desktop/*.log
+desktop/electron-builder.yaml.bak
 
 # ─── Secrets ───
 *.pem

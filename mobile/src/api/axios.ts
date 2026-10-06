@@ -185,7 +185,7 @@ function flush(token: string | null) {
 
 function redirectToRenew() {
   if (navigationRef.isReady()) {
-    navigationRef.navigate('Renew' as never);
+    navigationRef.navigate('Renewal' as never);
   }
 }
 
@@ -334,11 +334,17 @@ export const authApi = {
 
 export const billingApi = {
   status: () => axiosInstance.get<BillingStatus>('/app/billing/status'),
+
   renew: (planCode: string) =>
     axiosInstance.post<{ invoiceNumber: string }>('/app/billing/renew', { planCode }),
+
   invoice: () => axiosInstance.get<PublicInvoice | null>('/app/billing/invoice'),
-  stkPush: (phone: string) =>
-    axiosInstance.post<StkPushResponse>('/app/billing/mpesa/stk', { phone }),
+
+  stkPush: (phone: string, invoiceNumber?: string) =>
+    axiosInstance.post<StkPushResponse>('/app/billing/mpesa/stk', {
+      phone,
+      ...(invoiceNumber ? { invoiceNumber } : {}),
+    }),
 };
 
 export const branchApi = {

@@ -32,7 +32,7 @@ export type DashboardStackParamList = {
 export type InventoryStackParamList = {
   InventoryHome: undefined;
   DrugDetail: { drugId: string };
-  DrugForm: { drugId?: string } | undefined;
+  DrugForm: { drugId?: string; mode?: 'create' | 'edit' | 'restock' } | undefined;
   LowStock: undefined;
   Expiring: undefined;
 };
@@ -51,7 +51,7 @@ export type PrescriptionsStackParamList = {
 export type MoreStackParamList = {
   MoreHome: undefined;
 
-  Sales: undefined;
+  Sales: { customerId?: string; patientId?: string } | undefined;
   SaleDetail: { saleId: string };
 
   Patients: undefined;
@@ -76,6 +76,7 @@ export type MoreStackParamList = {
   Users: undefined;
 
   Billing: undefined;
+  BillingPending: undefined;
 
   Settings: undefined;
 };
