@@ -259,18 +259,38 @@ async function loadLowStock({ tenantId, branchId, limit = 10 }) {
 
   const agg = await Batch.aggregate([
     { $match: batchMatch },
-    { $group: { _id: '$drugId', qty: { $sum: '$qty' } } },
+    {
+      $group: {
+        _id: '$drugId',
+        qty: { $sum: '$qty' },
+        lastCostPrice: { $last: '$costPrice' },
+      },
+    },
   ]);
-  const qtyByDrug = Object.fromEntries(agg.map((r) => [String(r._id), r.qty]));
+
+  const byDrug = Object.fromEntries(agg.map((r) => [String(r._id), r]));
 
   return drugs
-    .map((d) => ({ name: d.name, qty: qtyByDrug[String(d._id)] || 0, reorderLevel: d.reorderLevel }))
+    .map((d) => {
+      const stat = byDrug[String(d._id)] || {};
+      const qty = stat.qty || 0;
+      const costPrice = stat.lastCostPrice || 0;
+      const gap = Math.max(0, (d.reorderLevel || 0) - qty);
+      return {
+        name: d.name,
+        qty,
+        reorderLevel: d.reorderLevel,
+        costPrice,
+        restockQty: gap,
+        restockCost: gap * costPrice,
+      };
+    })
     .filter((d) => d.qty <= d.reorderLevel)
     .sort((a, b) => a.qty - b.qty)
     .slice(0, limit);
 }
 
-async function loadExpiring({ tenantId, branchId, days = 30, limit = 10 }) {
+async function loadExpiring({ tenantId, branchId, days = 30, limit = 20 }) {
   const now = new Date();
   const until = new Date(Date.now() + days * 86400000);
 
@@ -281,30 +301,57 @@ async function loadExpiring({ tenantId, branchId, days = 30, limit = 10 }) {
   };
   if (branchId) match.branchId = toObjectId(branchId);
 
-  const rows = await Batch.aggregate([
-    { $match: match },
-    {
-      $lookup: {
-        from: 'drugs',
-        localField: 'drugId',
-        foreignField: '_id',
-        as: 'drug',
+  const [rows, summaryAgg] = await Promise.all([
+    Batch.aggregate([
+      { $match: match },
+      {
+        $lookup: {
+          from: 'drugs',
+          localField: 'drugId',
+          foreignField: '_id',
+          as: 'drug',
+        },
       },
-    },
-    { $unwind: { path: '$drug', preserveNullAndEmptyArrays: true } },
-    {
-      $project: {
-        _id: 0,
-        name: { $ifNull: ['$drug.name', 'Unknown'] },
-        qty: 1,
-        expiryDate: 1,
+      { $unwind: { path: '$drug', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          name: { $ifNull: ['$drug.name', 'Unknown'] },
+          qty: 1,
+          expiryDate: 1,
+          costPrice: { $ifNull: ['$costPrice', 0] },
+          sellingPrice: { $ifNull: ['$sellingPrice', 0] },
+        },
       },
-    },
-    { $sort: { expiryDate: 1 } },
-    { $limit: limit },
+      { $sort: { expiryDate: 1 } },
+      { $limit: limit },
+    ]),
+    Batch.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          batches: { $sum: 1 },
+          totalQty: { $sum: '$qty' },
+          totalCostValue: {
+            $sum: { $multiply: ['$qty', { $ifNull: ['$costPrice', 0] }] },
+          },
+          totalRetailValue: {
+            $sum: { $multiply: ['$qty', { $ifNull: ['$sellingPrice', 0] }] },
+          },
+        },
+      },
+    ]),
   ]);
 
-  return rows;
+  const summary = summaryAgg[0] || {
+    batches: 0,
+    totalQty: 0,
+    totalCostValue: 0,
+    totalRetailValue: 0,
+  };
+
+  return { rows, summary };
 }
 
 async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFAULT_WINDOW_DAYS }) {
@@ -336,15 +383,49 @@ async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFA
     ];
 
     if (topDrugs.length) {
-      lines.push(`- Top drugs (last ${windowDays}d): ${topDrugs.map((d) => `${d.name} (${d.qty})`).join(', ')}`);
+      lines.push(
+        `- Top drugs (last ${windowDays}d): ${topDrugs
+          .map((d) => `${d.name} (${d.qty})`)
+          .join(', ')}`
+      );
     }
+
     if (lowStock.length) {
-      lines.push(`- Low stock: ${lowStock.map((d) => `${d.name} (${d.qty})`).join(', ')}`);
+      const rowsText = lowStock
+        .map((d) => `${d.name} (${d.qty} left, reorder at ${d.reorderLevel})`)
+        .join(', ');
+      lines.push(`- Low stock: ${rowsText}`);
+
+      const totalRestockCost = lowStock.reduce((s, d) => s + (d.restockCost || 0), 0);
+      const totalRestockQty = lowStock.reduce((s, d) => s + (d.restockQty || 0), 0);
+
+      if (totalRestockQty > 0) {
+        lines.push(
+          `- Restock estimate: ${currency} ${Math.round(totalRestockCost)} to bring all low-stock items back to their reorder levels (${totalRestockQty} units total)`
+        );
+      }
     }
-    if (expiring.length) {
-      lines.push(`- Expiring soon: ${expiring.map((d) => `${d.name} (${d.qty})`).join(', ')}`);
+
+    if (expiring.rows.length) {
+      const rowsText = expiring.rows
+        .map((d) => `${d.name} (${d.qty} @ ${currency} ${d.costPrice})`)
+        .join(', ');
+
+      lines.push(`- Expiring soon (next 30 days): ${rowsText}`);
+
+      lines.push(
+        `- Expiring value at cost: ${currency} ${Math.round(expiring.summary.totalCostValue)} ` +
+          `across ${expiring.summary.batches} batches (${expiring.summary.totalQty} units)`
+      );
+
+      lines.push(
+        `- Expiring value at retail: ${currency} ${Math.round(expiring.summary.totalRetailValue)}`
+      );
     }
-    lines.push(`- Plan: ${plan?.name || tenant.planCode} · Branches: ${branch.multi ? 'multiple' : '1'}`);
+
+    lines.push(
+      `- Plan: ${plan?.name || tenant.planCode} · Branches: ${branch.multi ? 'multiple' : '1'}`
+    );
 
     lines.push(
       '',
@@ -353,6 +434,7 @@ async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFA
       'Use bullet points for lists of 3 or more items.',
       'When asked about "today", use the "Today\'s sales" figure — never the period total.',
       'When asked about "this week", "this month", or similar, use the "Last N days" figure and state the window.',
+      'When asked about "value" or "worth" of expiring or low-stock items, use the pre-computed values given above; never compute from a partial list.',
       'Never invent drug names, dosages, prices, sales figures, or trends. If the data above does not answer the question, say so plainly.',
       'Never provide medical advice. For any medical query, reply: "Please consult a licensed pharmacist."'
     );
@@ -371,7 +453,8 @@ async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFA
         sales,
         topDrugs,
         lowStock,
-        expiring,
+        expiring: expiring.rows,
+        expiringSummary: expiring.summary,
       },
     };
   });

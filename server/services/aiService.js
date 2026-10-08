@@ -6,18 +6,22 @@ const planService = require('./planService');
 const settingsService = require('./settingsService');
 const { ApiError } = require('../utils/apiError');
 const { logger } = require('../utils/logger');
+const { startOfDay } = require('../utils/dayRange');
 
 function hashPrompt(message, systemPrompt) {
   return crypto.createHash('sha256').update(`${message}|${systemPrompt}`).digest('hex');
 }
+
+/* ═══════════════════════════════════════════════════════════
+   QUOTA
+   ═══════════════════════════════════════════════════════════ */
 
 async function assertQuota(tenantId) {
   const plan = await planService.getTenantPlan(tenantId);
   const max = plan.limits?.maxAiCallsPerDay ?? 20;
   if (max <= 0) return;
 
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
+  const start = startOfDay();
 
   const count = await AiCall.countDocuments({
     __allowGlobal: true,
@@ -26,9 +30,18 @@ async function assertQuota(tenantId) {
   });
 
   if (count >= max) {
-    throw ApiError.badRequest('AI_QUOTA_EXCEEDED', `Daily AI quota (${max}) reached`);
+    throw ApiError.badRequest(
+      'AI_QUOTA_EXCEEDED',
+      `You've reached your daily AI limit (${max} calls on the ${plan.name} plan). ` +
+        `Upgrade to a higher plan to make more AI requests today.`,
+      { max, used: count, planCode: plan.code, planName: plan.name }
+    );
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   CORE CALL + LOG
+   ═══════════════════════════════════════════════════════════ */
 
 async function callAndLog({
   tenantId,
@@ -90,6 +103,10 @@ async function callAndLog({
     throw err;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   LANDING CHAT — public, no auth, never throws
+   ═══════════════════════════════════════════════════════════ */
 
 async function landingChat({ message, ip = null }) {
   const ctx = await contextService.buildLandingContext();
@@ -153,9 +170,15 @@ async function landingChat({ message, ip = null }) {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════
+   CLIENT CHAT — tenant, quota enforced
+   ═══════════════════════════════════════════════════════════ */
+
 async function tenantChat({ tenantId, branchId = null, message }) {
   if (!tenantId) throw ApiError.unauthorized('NO_TENANT', 'Tenant context required');
-  if (!message || typeof message !== 'string') throw ApiError.badRequest('MESSAGE_REQUIRED', 'message required');
+  if (!message || typeof message !== 'string') {
+    throw ApiError.badRequest('MESSAGE_REQUIRED', 'message required');
+  }
 
   const planEnabled = await settingsService.get('feature_ai_insights', true);
   if (!planEnabled) throw ApiError.forbidden('AI_DISABLED', 'AI is disabled');
@@ -177,6 +200,10 @@ async function tenantChat({ tenantId, branchId = null, message }) {
     maxTokens: 800,
   });
 }
+
+/* ═══════════════════════════════════════════════════════════
+   INSIGHTS CACHE
+   ═══════════════════════════════════════════════════════════ */
 
 async function getCachedInsight({ tenantId, type, branchId = null }) {
   const now = new Date();
@@ -222,6 +249,10 @@ async function saveInsight({
     expiresAt,
   });
 }
+
+/* ═══════════════════════════════════════════════════════════
+   INSIGHT GENERATORS
+   ═══════════════════════════════════════════════════════════ */
 
 async function generateWeeklyInsights({ tenantId, branchId = null, force = false }) {
   const type = 'weekly_insight';
@@ -339,13 +370,16 @@ async function generateExpiryRisk({ tenantId, branchId = null, force = false }) 
   });
 }
 
+/* ═══════════════════════════════════════════════════════════
+   QUOTA CHECK (exposed for controllers if needed)
+   ═══════════════════════════════════════════════════════════ */
+
 async function remainingQuota(tenantId) {
   const plan = await planService.getTenantPlan(tenantId);
   const max = plan.limits?.maxAiCallsPerDay ?? 20;
   if (max <= 0) return { unlimited: true, used: 0, max: 0, remaining: null };
 
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
+  const start = startOfDay();
 
   const used = await AiCall.countDocuments({
     __allowGlobal: true,
