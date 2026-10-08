@@ -11,10 +11,6 @@ function hashPrompt(message, systemPrompt) {
   return crypto.createHash('sha256').update(`${message}|${systemPrompt}`).digest('hex');
 }
 
-/* ═══════════════════════════════════════════════════════════
-   QUOTA
-   ═══════════════════════════════════════════════════════════ */
-
 async function assertQuota(tenantId) {
   const plan = await planService.getTenantPlan(tenantId);
   const max = plan.limits?.maxAiCallsPerDay ?? 20;
@@ -34,18 +30,37 @@ async function assertQuota(tenantId) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   CORE CALL + LOG
-   ═══════════════════════════════════════════════════════════ */
-
-async function callAndLog({ tenantId, feature, message, systemPrompt, promptPreview = null }) {
+async function callAndLog({
+  tenantId,
+  feature,
+  message,
+  systemPrompt,
+  maxTokens = 800,
+  promptPreview = null,
+}) {
   if (!hdmAi.enabled) throw ApiError.internal('AI_DISABLED', 'HDM AI is not configured');
 
   const promptHash = hashPrompt(message, systemPrompt);
   const started = Date.now();
 
   try {
-    const result = await hdmAi.complete({ message, systemPrompt });
+    const result = await hdmAi.complete({ message, systemPrompt, maxTokens });
+
+    if (process.env.AI_DEBUG === 'true') {
+      logger.info(
+        {
+          feature,
+          tenantId: String(tenantId),
+          model: result.model,
+          latencyMs: Date.now() - started,
+          tokensUsed: result.tokensUsed,
+          message,
+          reply: result.reply,
+          systemPrompt,
+        },
+        'AI call'
+      );
+    }
 
     AiCall.create({
       tenantId,
@@ -76,10 +91,6 @@ async function callAndLog({ tenantId, feature, message, systemPrompt, promptPrev
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   LANDING CHAT — public, no auth, never throws
-   ═══════════════════════════════════════════════════════════ */
-
 async function landingChat({ message, ip = null }) {
   const ctx = await contextService.buildLandingContext();
 
@@ -91,7 +102,27 @@ async function landingChat({ message, ip = null }) {
   const started = Date.now();
 
   try {
-    const result = await hdmAi.complete({ message, systemPrompt: ctx.systemPrompt });
+    const result = await hdmAi.complete({
+      message,
+      systemPrompt: ctx.systemPrompt,
+      maxTokens: 400,
+    });
+
+    if (process.env.AI_DEBUG === 'true') {
+      logger.info(
+        {
+          feature: 'landing_chat',
+          tenantId: null,
+          model: result.model,
+          latencyMs: Date.now() - started,
+          tokensUsed: result.tokensUsed,
+          message,
+          reply: result.reply,
+          systemPrompt: ctx.systemPrompt,
+        },
+        'AI call'
+      );
+    }
 
     AiCall.create({
       tenantId: null,
@@ -122,10 +153,6 @@ async function landingChat({ message, ip = null }) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   CLIENT CHAT — tenant, quota enforced
-   ═══════════════════════════════════════════════════════════ */
-
 async function tenantChat({ tenantId, branchId = null, message }) {
   if (!tenantId) throw ApiError.unauthorized('NO_TENANT', 'Tenant context required');
   if (!message || typeof message !== 'string') throw ApiError.badRequest('MESSAGE_REQUIRED', 'message required');
@@ -147,12 +174,9 @@ async function tenantChat({ tenantId, branchId = null, message }) {
     feature: 'chat',
     message,
     systemPrompt: ctx.systemPrompt,
+    maxTokens: 800,
   });
 }
-
-/* ═══════════════════════════════════════════════════════════
-   INSIGHTS CACHE
-   ═══════════════════════════════════════════════════════════ */
 
 async function getCachedInsight({ tenantId, type, branchId = null }) {
   const now = new Date();
@@ -162,12 +186,27 @@ async function getCachedInsight({ tenantId, type, branchId = null }) {
     type,
     $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
   };
-  if (branchId) query.branchId = branchId;
+
+  if (branchId) {
+    query.branchId = branchId;
+  } else {
+    query.branchId = null;
+  }
 
   return AiInsight.findOne(query).sort({ createdAt: -1 }).lean();
 }
 
-async function saveInsight({ tenantId, branchId = null, type, payload, periodStart = null, periodEnd = null, confidence = null, model = null, ttlHours = 24 }) {
+async function saveInsight({
+  tenantId,
+  branchId = null,
+  type,
+  payload,
+  periodStart = null,
+  periodEnd = null,
+  confidence = null,
+  model = null,
+  ttlHours = 24,
+}) {
   const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000);
 
   return AiInsight.create({
@@ -183,10 +222,6 @@ async function saveInsight({ tenantId, branchId = null, type, payload, periodSta
     expiresAt,
   });
 }
-
-/* ═══════════════════════════════════════════════════════════
-   INSIGHT GENERATORS
-   ═══════════════════════════════════════════════════════════ */
 
 async function generateWeeklyInsights({ tenantId, branchId = null, force = false }) {
   const type = 'weekly_insight';
@@ -215,6 +250,7 @@ async function generateWeeklyInsights({ tenantId, branchId = null, force = false
     feature: 'insights',
     message,
     systemPrompt: ctx.systemPrompt,
+    maxTokens: 600,
   });
 
   return saveInsight({
@@ -253,6 +289,7 @@ async function generateStockForecast({ tenantId, branchId = null, force = false 
     feature: 'forecast',
     message,
     systemPrompt: ctx.systemPrompt,
+    maxTokens: 600,
   });
 
   return saveInsight({
@@ -289,6 +326,7 @@ async function generateExpiryRisk({ tenantId, branchId = null, force = false }) 
     feature: 'expiry_risk',
     message,
     systemPrompt: ctx.systemPrompt,
+    maxTokens: 600,
   });
 
   return saveInsight({
@@ -300,10 +338,6 @@ async function generateExpiryRisk({ tenantId, branchId = null, force = false }) 
     ttlHours: 24,
   });
 }
-
-/* ═══════════════════════════════════════════════════════════
-   QUOTA CHECK (exposed for controllers if needed)
-   ═══════════════════════════════════════════════════════════ */
 
 async function remainingQuota(tenantId) {
   const plan = await planService.getTenantPlan(tenantId);

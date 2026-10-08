@@ -8,10 +8,7 @@ const Sale = require('../models/client/Sale');
 const { runAsTenant } = require('../models/plugins/context');
 const settingsService = require('./settingsService');
 const { startOfDay } = require('../utils/dayRange');
-
-/* ═══════════════════════════════════════════════════════════
-   LANDING CONTEXT
-   ═══════════════════════════════════════════════════════════ */
+const { toObjectId } = require('../utils/objectId');
 
 const LANDING_KEYS = [
   'platform_name',
@@ -156,10 +153,6 @@ async function buildLandingContext() {
   };
 }
 
-/* ═══════════════════════════════════════════════════════════
-   TENANT CONTEXT
-   ═══════════════════════════════════════════════════════════ */
-
 const DEFAULT_WINDOW_DAYS = 30;
 
 async function loadTenant(tenantId) {
@@ -182,13 +175,14 @@ async function loadBranch({ tenantId, branchId }) {
 async function loadSalesSummary({ tenantId, branchId, days = DEFAULT_WINDOW_DAYS }) {
   const startOfToday = startOfDay();
   const since = new Date(Date.now() - days * 86400000);
-  const branchFilter = branchId ? { branchId } : {};
+  const tenantObjId = toObjectId(tenantId);
+  const branchFilter = branchId ? { branchId: toObjectId(branchId) } : {};
 
   const [todayAgg, periodAgg] = await Promise.all([
     Sale.aggregate([
       {
         $match: {
-          tenantId,
+          tenantId: tenantObjId,
           status: { $ne: 'voided' },
           createdAt: { $gte: startOfToday },
           ...branchFilter,
@@ -199,7 +193,7 @@ async function loadSalesSummary({ tenantId, branchId, days = DEFAULT_WINDOW_DAYS
     Sale.aggregate([
       {
         $match: {
-          tenantId,
+          tenantId: tenantObjId,
           status: { $ne: 'voided' },
           createdAt: { $gte: since },
           ...branchFilter,
@@ -230,11 +224,11 @@ async function loadSalesSummary({ tenantId, branchId, days = DEFAULT_WINDOW_DAYS
 async function loadTopDrugs({ tenantId, branchId, days = DEFAULT_WINDOW_DAYS, limit = 10 }) {
   const since = new Date(Date.now() - days * 86400000);
   const match = {
-    tenantId,
+    tenantId: toObjectId(tenantId),
     createdAt: { $gte: since },
     status: { $ne: 'voided' },
   };
-  if (branchId) match.branchId = branchId;
+  if (branchId) match.branchId = toObjectId(branchId);
 
   const rows = await Sale.aggregate([
     { $match: match },
@@ -260,8 +254,8 @@ async function loadLowStock({ tenantId, branchId, limit = 10 }) {
 
   if (!drugs.length) return [];
 
-  const batchMatch = { tenantId };
-  if (branchId) batchMatch.branchId = branchId;
+  const batchMatch = { tenantId: toObjectId(tenantId) };
+  if (branchId) batchMatch.branchId = toObjectId(branchId);
 
   const agg = await Batch.aggregate([
     { $match: batchMatch },
@@ -281,11 +275,11 @@ async function loadExpiring({ tenantId, branchId, days = 30, limit = 10 }) {
   const until = new Date(Date.now() + days * 86400000);
 
   const match = {
-    tenantId,
+    tenantId: toObjectId(tenantId),
     expiryDate: { $gte: now, $lte: until },
     qty: { $gt: 0 },
   };
-  if (branchId) match.branchId = branchId;
+  if (branchId) match.branchId = toObjectId(branchId);
 
   const rows = await Batch.aggregate([
     { $match: match },
@@ -354,11 +348,13 @@ async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFA
 
     lines.push(
       '',
-      'Answer concisely in plain English. Use only the data above.',
-      "When asked about \"today\", use the \"Today's sales\" figure — never the period total.",
+      'Answer clearly in plain English. Use only the data above.',
+      'Give enough context to be useful — aim for 2-4 short paragraphs when the question warrants it.',
+      'Use bullet points for lists of 3 or more items.',
+      'When asked about "today", use the "Today\'s sales" figure — never the period total.',
       'When asked about "this week", "this month", or similar, use the "Last N days" figure and state the window.',
-      'Never invent drug names, dosages, or prices. Never provide medical advice.',
-      'For any medical query, reply: "Please consult a licensed pharmacist."'
+      'Never invent drug names, dosages, prices, sales figures, or trends. If the data above does not answer the question, say so plainly.',
+      'Never provide medical advice. For any medical query, reply: "Please consult a licensed pharmacist."'
     );
 
     return {
