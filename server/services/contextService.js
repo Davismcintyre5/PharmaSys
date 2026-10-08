@@ -7,9 +7,10 @@ const { Drug, Batch } = require('../models/client/Inventory');
 const Sale = require('../models/client/Sale');
 const { runAsTenant } = require('../models/plugins/context');
 const settingsService = require('./settingsService');
+const { startOfDay } = require('../utils/dayRange');
 
 /* ═══════════════════════════════════════════════════════════
-   LANDING CONTEXT — public, cross-tenant, reads platform data
+   LANDING CONTEXT
    ═══════════════════════════════════════════════════════════ */
 
 const LANDING_KEYS = [
@@ -156,7 +157,7 @@ async function buildLandingContext() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   TENANT CONTEXT — tenant-scoped, live business data
+   TENANT CONTEXT
    ═══════════════════════════════════════════════════════════ */
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -179,28 +180,48 @@ async function loadBranch({ tenantId, branchId }) {
 }
 
 async function loadSalesSummary({ tenantId, branchId, days = DEFAULT_WINDOW_DAYS }) {
+  const startOfToday = startOfDay();
   const since = new Date(Date.now() - days * 86400000);
-  const match = {
-    tenantId,
-    createdAt: { $gte: since },
-    status: { $ne: 'voided' },
-  };
-  if (branchId) match.branchId = branchId;
+  const branchFilter = branchId ? { branchId } : {};
 
-  const agg = await Sale.aggregate([
-    { $match: match },
-    {
-      $group: {
-        _id: null,
-        total: { $sum: '$grandTotal' },
-        count: { $sum: 1 },
+  const [todayAgg, periodAgg] = await Promise.all([
+    Sale.aggregate([
+      {
+        $match: {
+          tenantId,
+          status: { $ne: 'voided' },
+          createdAt: { $gte: startOfToday },
+          ...branchFilter,
+        },
       },
-    },
+      { $group: { _id: null, total: { $sum: '$grandTotal' }, count: { $sum: 1 } } },
+    ]),
+    Sale.aggregate([
+      {
+        $match: {
+          tenantId,
+          status: { $ne: 'voided' },
+          createdAt: { $gte: since },
+          ...branchFilter,
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$grandTotal' }, count: { $sum: 1 } } },
+    ]),
   ]);
 
   return {
-    total: agg[0]?.total || 0,
-    count: agg[0]?.count || 0,
+    today: {
+      total: todayAgg[0]?.total || 0,
+      count: todayAgg[0]?.count || 0,
+    },
+    period: {
+      total: periodAgg[0]?.total || 0,
+      count: periodAgg[0]?.count || 0,
+      since,
+      days,
+    },
+    total: periodAgg[0]?.total || 0,
+    count: periodAgg[0]?.count || 0,
     since,
     days,
   };
@@ -316,12 +337,12 @@ async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFA
       '',
       'Current context:',
       `- Branch: ${branch.name}`,
-      `- Period: last ${windowDays} days`,
-      `- Sales: ${currency} ${Math.round(sales.total)} across ${sales.count} transactions`,
+      `- Today's sales: ${currency} ${Math.round(sales.today.total)} across ${sales.today.count} transactions`,
+      `- Last ${windowDays} days: ${currency} ${Math.round(sales.period.total)} across ${sales.period.count} transactions`,
     ];
 
     if (topDrugs.length) {
-      lines.push(`- Top drugs: ${topDrugs.map((d) => `${d.name} (${d.qty})`).join(', ')}`);
+      lines.push(`- Top drugs (last ${windowDays}d): ${topDrugs.map((d) => `${d.name} (${d.qty})`).join(', ')}`);
     }
     if (lowStock.length) {
       lines.push(`- Low stock: ${lowStock.map((d) => `${d.name} (${d.qty})`).join(', ')}`);
@@ -334,6 +355,8 @@ async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFA
     lines.push(
       '',
       'Answer concisely in plain English. Use only the data above.',
+      "When asked about \"today\", use the \"Today's sales\" figure — never the period total.",
+      'When asked about "this week", "this month", or similar, use the "Last N days" figure and state the window.',
       'Never invent drug names, dosages, or prices. Never provide medical advice.',
       'For any medical query, reply: "Please consult a licensed pharmacist."'
     );
@@ -357,10 +380,6 @@ async function buildTenantContext({ tenantId, branchId = null, windowDays = DEFA
     };
   });
 }
-
-/* ═══════════════════════════════════════════════════════════
-   EXPORTS
-   ═══════════════════════════════════════════════════════════ */
 
 module.exports = {
   buildLandingContext,
