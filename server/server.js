@@ -14,6 +14,7 @@ const pkg = require('./package.json');
 const { env } = require('./config/env');
 const { connectDB, disconnectDB, mongoose } = require('./config/db');
 const { connectRedis, disconnectRedis, getRedis } = require('./config/redis');
+const { startKeepAlive, stopKeepAlive } = require('./config/keepAlive');
 const { logger } = require('./utils/logger');
 
 const requestId = require('./middleware/global/requestId');
@@ -25,8 +26,6 @@ const corsMw = require('./middleware/global/cors');
 const routes = require('./routes');
 const { startSchedulers, stopSchedulers } = require('./schedulers');
 
-/* ─────────── crash throttle ─────────── */
-
 const CRASH_WINDOW_MS = 60_000;
 const CRASH_LIMIT = 5;
 const crashTimes = [];
@@ -37,8 +36,6 @@ function recordCrash() {
   while (crashTimes.length && now - crashTimes[0] > CRASH_WINDOW_MS) crashTimes.shift();
   return crashTimes.length;
 }
-
-/* ─────────── main ─────────── */
 
 async function bootstrap() {
   logger.info(`PharmaSys API v${pkg.version} starting — env=${env.nodeEnv} port=${env.port}`);
@@ -70,17 +67,13 @@ async function bootstrap() {
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
 
-  /* ─── CORS — single source of truth in middleware/global/cors.js ─── */
   app.use(corsMw);
   app.options(/.*/, corsMw);
 
-  /* ─── body parsers ─── */
-  // Webhook-specific (must run BEFORE the global json parser)
   app.use('/api/live/webhooks/stripe', express.raw({ type: 'application/json' }));
   app.use('/api/live/webhooks/mpesa', express.json({ limit: '1mb' }));
   app.use('/api/live/webhooks/mpesa/timeout', express.json({ limit: '1mb' }));
 
-  // Global parsers
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -98,10 +91,8 @@ async function bootstrap() {
     },
   }));
 
-  /* ─── static brand assets ─── */
   app.use('/brand', express.static('public/brand'));
 
-  /* ─── informational routes ─── */
   app.get('/', (_req, res) => {
     res.json({
       ok: true,
@@ -151,14 +142,11 @@ async function bootstrap() {
     });
   });
 
-  /* ─── API routes ─── */
   app.use('/api', routes);
 
-  /* ─── terminal middleware ─── */
   app.use(notFound);
   app.use(errorHandler);
 
-  /* ─── HTTP + Socket.IO ─── */
   const server = http.createServer(app);
 
   const io = new Server(server, {
@@ -205,11 +193,17 @@ async function bootstrap() {
     logger.error({ err: e.message }, 'schedulers failed to start — server continues');
   }
 
-  /* ─── shutdown ─── */
+  try {
+    startKeepAlive();
+  } catch (e) {
+    logger.error({ err: e.message }, 'keep-alive failed to start — server continues');
+  }
+
   const shutdown = async (signal) => {
     logger.warn(`shutdown: ${signal}`);
     server.close(async () => {
       try {
+        stopKeepAlive();
         await stopSchedulers();
         await io.close();
         await disconnectRedis();

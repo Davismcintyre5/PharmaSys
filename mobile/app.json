@@ -30,11 +30,26 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "pharmasys" },
-            { "scheme": "https", "host": "pharmasys.hdm.co.ke" }
+            {
+              "scheme": "pharmasys"
+            },
+            {
+              "scheme": "https",
+              "host": "pharmasys.hdm.co.ke"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
+      ],
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ]
     },
     "web": {
@@ -54,7 +69,10 @@
       "apiUrl": "https://pharmasysapi.hdm.co.ke/api",
       "socketUrl": "https://pharmasysapi.hdm.co.ke",
       "appName": "PharmaSys",
-      "appEnv": "production"
+      "appEnv": "production",
+      "eas": {
+        "projectId": "c0c4fc15-78c8-41f7-ad79-b5c4744fc0b5"
+      }
     }
   }
 }

@@ -38,7 +38,13 @@ const env = {
   appUrl: optional('APP_URL', 'http://localhost:3000'),
   adminUrl: optional('ADMIN_URL', 'http://localhost:3001'),
   apiUrl: optional('API_URL', 'http://localhost:5000'),
+  baseUrl: optional('BASE_URL', optional('API_URL', 'http://localhost:5000')),
   logLevel: optional('LOG_LEVEL', 'debug'),
+
+  keepAlive: {
+    enabled: bool('KEEP_ALIVE_ENABLED', false),
+    verbose: bool('KEEP_ALIVE_VERBOSE', false),
+  },
 
   mongoUri: required('MONGODB_URI'),
 
